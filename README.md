@@ -324,6 +324,43 @@ Remaining renames to the convention:
 | `notion-songs` | `svc-notion-songs` | catalog service credential |
 | `telnyx-test` | `svc-telnyx-test` | catalog service credential |
 
+## Doing control-plane work from a VM
+
+Two hand-written skills exist so that creating things does not require a laptop,
+a terminal, or an SSH key — a request typed into the **Prompt Shelley** box on a
+phone reaches a VM, and the VM can act. Both work the same way: an exe.dev
+http-proxy integration holds the credential *at the edge*, and the VM sends an
+unauthenticated request to an `int.exe.xyz` host.
+
+| Skill | Integration | Creates |
+| ----- | ----------- | ------- |
+| `create-vm` | `api-exe-new` (exe.dev CLI over HTTPS, `--cmds=new`) | exe.dev VMs on an IV base image |
+| `create-repo` | `mcp-github-home` (GitHub's hosted MCP server) | GitHub repos, seeded with files |
+
+The shape is worth stating once, because it generalises: **a capability the VM
+should have is an integration scoped to exactly that capability, not a token.**
+`api-exe-new` can run `new` and nothing else — `ls`, `rm`, `whoami` and
+`integrations list` all return 403. That scoping is what makes it safe to attach
+to an agent-driven box.
+
+Two asymmetries between them are load-bearing, and both are recorded in the
+skills:
+
+- `api-exe-new` cannot **check** anything (no `ls`), so name collisions are
+  discovered by submitting. `mcp-github-home` can read freely, so a duplicate
+  repo name fails cleanly and is reported verbatim.
+- Neither can **undo**. There is no delete-VM permission and no delete-repository
+  tool at all, so in both cases a mistyped name is the owner's to clean up.
+  Confirm the name back before creating; that is the only guard there is.
+
+`mcp-github-home` also creates a second write path to GitHub that does *not* go
+through the `repo-*-rw` integrations. Read **Authoring boundary** above with that
+in mind: the single-writer rule for `iv-provision` and `exeslim` is enforced by
+attachment, and MCP writes are not scoped per repo the way git integrations are.
+The rule therefore has to be honoured rather than merely relied upon — use the
+MCP write path for repos that have no integration *yet*, never to route around
+one deliberately withheld.
+
 ## General-purpose Markdown with Apex
 
 [Apex](https://github.com/ApexMarkdown/apex) is the Markdown engine for
@@ -396,7 +433,7 @@ and this script continuing to carry the volatile, version-pinned tools. See
 | `vendor/`               | Third-party/IV code vendored with a SHA pin verified at install (`entire-agent-agentsview`).                                                               |
 | `provisioning/`         | Declarative source for the team layer: `skills.manifest`, `mcp.manifest`, `agents-shared.md`. `vendor-skills.sh` reads these; nothing is fetched from another repository. |
 | `tests/`                | Validation suite: `smoke-provision.sh` (run on a VM after provisioning), `test-provision.sh`, `test-ssh-guard.sh`, Python unit tests — run by CI.          |
-| `.claude/skills/`       | Project-level skills for agents working in this repo (`join-tailnet`, `upgrade-vm`) — not vendored onto VMs.                                               |
+| `skills-local/`         | Hand-written in-tree skills (`join-tailnet`, `upgrade-vm`, `create-vm`, `create-repo`), installed alongside the vendored set. `vendor-skills.sh` never touches this path — it `rm -rf`s `skills/`, so a hand-written skill there would vanish silently. |
 | `*.qmd` / `*.md`        | Markdown documentation sources, readable in-repo and served by `provision-docsite` on any IV VM.                                                               |
 
 ## Reproducibility
