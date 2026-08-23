@@ -53,6 +53,29 @@ git push origin 2.5.0
 Never move an existing release tag. Consumers pin the recipe by checking out the
 tag before running `provision-iv.sh`.
 
+### Bump the `create-vm` pin *in* the release, not after it
+
+`skills-local/create-vm/SKILL.md` hard-codes the `iv-provision` tag a new VM
+checks out, in four places, and it is the tag the skill's own "**Always pin the
+tag**" rule is about. So it must name the release it ships in.
+
+The natural sequence gets this wrong. Tag `main`, notice the pin is stale, bump
+it, merge — and now the tag you cut points at a skill telling the next VM to
+provision the release *before* it. `3.0.17` and `3.0.18` both shipped that way,
+which is why `3.0.19` exists. It is self-correcting only in the sense that every
+release fixes its predecessor and breaks itself.
+
+Put the bump on the release branch, so the pin and the tag are the same commit:
+
+```bash
+sed -i 's/<previous>/<this release>/g' skills-local/create-vm/SKILL.md
+# ...merge the release branch, then tag the merge commit
+```
+
+A doc-only release is still a release here: the fleet reads these skills from a
+detached checkout at a tag, so an unbumped pin is invisible until a VM is created
+from it.
+
 ## Refreshing the vendored skills
 
 Team skills are vendored into `skills/` (committed to the repo so they are
