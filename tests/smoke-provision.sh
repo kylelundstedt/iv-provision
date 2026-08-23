@@ -63,6 +63,15 @@ while IFS= read -r name; do
   test -L "$HOME/.codex/skills/$name"
 done < "$HOME/.agents/iv-team-skills.list"
 
+# The hand-written skills specifically. The loop above only checks that whatever
+# is LISTED got installed, so it passes vacuously if skills-local/ stops being
+# copied at all -- which is precisely the regression to catch, since these are
+# the skills that are not recoverable from the manifest.
+for name in join-tailnet upgrade-vm create-vm; do
+  test -f "$HOME/.agents/skills/$name/SKILL.md"
+  grep -qx "$name" "$HOME/.agents/iv-team-skills.list"
+done
+
 test -f "$lock"
 grep -qx "duckdb_version=$actual_duckdb" "$lock"
 grep -qx "aws_cli_version=$actual_aws" "$lock"
