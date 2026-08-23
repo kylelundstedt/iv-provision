@@ -9,7 +9,7 @@ Three numbers drove it:
 
 | | |
 |---|---|
-| **0.54s vs 8.9s** | random reads over a 2.4GB `.duckdb` — tuned vs default Cloud Disk. Untuned it is **16× slower**; tuned it is **within 1.2× of local disk** (0.45s). The default config is the difference between unusable and fine. |
+| **0.54s vs 8.9s** | random reads over a 2.4GB `.duckdb` — tuned vs default Cloud Disk. Untuned it is **16× slower**. Caveat: the tuned arm's cache (8G+20G) exceeded the file, so this measures *cache on vs cache off*, not behaviour past cache capacity — see [methodology](#read-this-before-quoting-a-number). |
 | **693 MB** | fsync-acked data lost on host loss with the default `write-back=true`. Not a rollback of a few seconds — 693 of 782 acked 1MB records vanished. `write-back=false` lost **0 MB**, at 6.2 fsync ops/s vs 350 (**56× slower**). |
 | **1.75s / 851 KB** | to fork a live 1.1GB dataset, and what the fork costs in the bucket. Copy-on-write dataset versioning is real, works, and is the one thing here IV cannot do today. |
 
@@ -34,6 +34,37 @@ for Parquet, Cloud Disk for `.duckdb`.**
 
 All numbers are medians of repeats, produced by `suite/`, raw rows in
 `results/*.jsonl`. Regenerate with `python3 suite/report.py results/*.jsonl`.
+
+> ### Read this before quoting a number
+>
+> **`drop_caches` does not clear a userspace cache.** The harness drops the
+> kernel page cache between reads, but both cloud-disk and TigrisFS hold their
+> own in-process caches. So every steady-state read number below is
+> **warm-cache performance**, not cold-from-Tigris performance. Two consequences:
+>
+> **1. The tuned arm's cache was never exceeded.** The "big" 2.37GB `.duckdb`
+> was chosen to exceed `max-cache-size`, and it does for the *default* config
+> (1G RAM, disk cache off) — that arm genuinely faulted from Tigris, so the
+> 8.884s is real. But the *tuned* arm had 8G RAM + 20G disk cache, so the file
+> fit entirely and 0.536s is "fits in cache", not "faults from Tigris".
+> **The 16× gap is a real measurement of turning the cache on. It is NOT
+> evidence that Cloud Disk stays fast once a working set outgrows its cache** —
+> that case is untested, and it is the case IV would hit at dataset scale.
+> The honest cold number in this report is the cold-mount row (`b4_*`), which
+> wipes `/var/lib/cloud-disk` and restarts the daemon, killing both caches:
+> **16.9s default, 1.14s with `warm-start-bytes=8G`.**
+>
+> **2. The TigrisFS-vs-httpfs Parquet comparison is withdrawn.** TigrisFS
+> scanned 526MB in 0.387s = 1,360 MB/s, within 5% of local disk. That is not
+> physically plausible from object storage on this box; the daemon served data
+> it had just written. The httpfs arm (26 MB/s) was run on stock settings with
+> no tuning, so it is unfair in the opposite direction. **Neither number should
+> be used.** This does not affect the TigrisFS conclusions that matter
+> (transparency, 1.0× storage, concurrent readers), none of which are timings.
+>
+> Unaffected by all of the above: every durability result (the host-loss tests
+> explicitly wipe the cache), every F-finding, storage amplification, fork
+> timings, and the concurrency/capability results.
 
 ### Performance vs local disk and vs httpfs-on-Parquet
 
@@ -162,8 +193,8 @@ The question: does IV need Cloud Disk's block device at all?
 | workload | local | Cloud Disk (tuned) | **TigrisFS** | winner |
 |---|---|---|---|---|
 | Parquet build, 40M rows (s) | 29.2 | 30.1 | **32.1** | tie |
-| Parquet scan (s) | 0.37¹ | 0.36 | **0.39** | tie |
-| Parquet point lookup (s) | – | 0.54 | **1.11** | Cloud Disk, mildly |
+| Parquet scan (s)² | 0.37 | 0.36 | **0.39** | tie (both cache-warm) |
+| Parquet point lookup (s)² | – | 0.54 | **1.11** | inconclusive |
 | **Random read, 2.4GB `.duckdb` (s)** | 0.455 | **0.536** | **8.198** | **Cloud Disk, 15×** |
 | Full scan, 2.4GB `.duckdb` (s) | 0.366 | 0.355 | 5.975 | Cloud Disk, 17× |
 | Build 2.4GB `.duckdb` (s) | 34.3 | 33.5 | **180.7** | Cloud Disk, 5.4× |
@@ -175,7 +206,10 @@ The question: does IV need Cloud Disk's block device at all?
 | **Objects readable without a mount** | – | **no** | **yes** | **TigrisFS** |
 | **Concurrent readers, 2 hosts** | – | **no** (exclusive lease) | **yes** | **TigrisFS** |
 
-¹ httpfs-on-Parquet, for reference, was 20.3s — both mounts crush it.
+² **Withdrawn as a comparison** — both served from warm userspace caches; the
+httpfs control (20.3s) was untuned. See
+[methodology](#read-this-before-quoting-a-number). The TigrisFS conclusions
+below rest on the non-timing rows, which are unaffected.
 
 The hypothesis held exactly. **TigrisFS is fine for whole-file Parquet and bad
 for anything written in place**, because DuckDB updates random offsets inside
