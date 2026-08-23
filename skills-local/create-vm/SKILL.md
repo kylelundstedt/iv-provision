@@ -56,52 +56,75 @@ The shapes are deliberately **not** symmetric.
 ### exeslim-dev -- dev / agent boxes (the common case)
 
 Carries Shelley plus `git jq nginx-light openssh-client`, so it can provision
-itself. Create it with the tailnet tag, then provision over SSH:
+itself. Create and provision in **one call**. Copy this verbatim, substituting
+only the name and sizes:
 
-```
-new --name=<name> --tag=tailnet --image=ghcr.io/kylelundstedt/exeslim-dev:2026-08-19.13.1 --cpu=2 --memory=8GB --disk=15GB
+```bash
+curl -s --max-time 300 -X POST https://api-exe-new.int.exe.xyz/exec -d "new --name=<name> --tag=tailnet --image=ghcr.io/kylelundstedt/exeslim-dev:2026-08-19.13.1 --cpu=2 --memory=8GB --disk=15GB --prompt='sudo systemd-run --unit=iv-provision --collect --property=Type=oneshot --property=TimeoutStartSec=3600 --uid=exedev --setenv=HOME=/home/exedev /bin/bash -lc \"git clone https://github.com/kylelundstedt/iv-provision.git ~/iv-provision && git -C ~/iv-provision checkout 3.0.16 && ~/iv-provision/provision-iv.sh\"'"
 ```
 
 `--tag=tailnet` carries the `api-tailscale` integration, which is what lets
 `provision-iv.sh` join the tailnet (automatic since 3.0.5). Without the tag,
 provisioning prints `not joined: api-tailscale integration not attached` and
-carries on regardless -- a quiet no-op, not an error.
-
-### Then provision -- over SSH, not `--prompt`
-
-Wait for the VM to appear on the tailnet, then:
-
-```bash
-ssh <name> "git clone https://github.com/kylelundstedt/iv-provision.git ~/iv-provision \
-  && git -C ~/iv-provision checkout 3.0.16 \
-  && ~/iv-provision/provision-iv.sh"
-```
+carries on regardless -- a quiet no-op, not an error. Tag and prompt are a pair.
 
 **Always pin the tag.** An unpinned checkout "succeeds, prints nothing alarming,
 and provisions an older recipe" (`upgrade-vm` skill).
 
-#### Why not `--prompt`
+#### `systemd-run` is load-bearing -- do not simplify it away
 
-`new --prompt` hands the provisioning command to the new VM's Shelley as an
-*instruction*, not an exec. It is one-shot and bounded by that session's context
-window: provisioning takes minutes, and the session can hit `context deadline
-exceeded` mid-run, leaving a VM that exists, looks created, and is half
-provisioned. Measured on `iv-cli` 2026-08-22 -- the create returned an error, the
-VM was fine, and the SSH path finished the job.
+The obvious prompt -- `git clone ... && provision-iv.sh` on its own -- **cannot
+work**, and fails in a way that looks like something else.
 
-SSH has none of that: the command either runs to completion or fails loudly, and
-nothing cancels it partway.
+`provision-iv.sh` installs IV's pinned Shelley, and to swap the binary it runs
+`systemctl stop shelley.socket` / `stop shelley.service`. A `--prompt` command
+*is* that service. So the script kills the session executing it, partway through:
+the agent reports `Tool did not stop within the grace period after cancellation;
+its output was discarded`, and the VM is left provisioned up to `install_shelley`
+with no lock file. Measured on `iv-canary-f` and `iv-canary-g`, 2026-08-22.
 
-`--prompt` remains a reasonable **fallback** when SSH is genuinely unavailable
-(no tailnet yet, no key to hand). If used, quote it -- the command contains `&&`
-and `~`, which the shell would otherwise eat:
+`systemd-run` hands the work to systemd, so nothing in `provision-iv.sh` can kill
+it. It also returns immediately, letting the prompt session end cleanly. Verified
+on `iv-canary-h` and `iv-canary-j`: `unit Result: success`, `shelley: active`,
+smoke PASS, **one pass, no repair step**.
+
+The reflex fix for the truncation -- "provision over SSH instead" -- is worse: a
+brand-new VM is not on the tailnet (so `ssh <name>` does not resolve) and the
+exe.dev edge `ssh <name>.exe.xyz` requires the *account owner's* key, which a
+fleet VM deliberately does not have (`Permission denied (publickey)`). That is a
+closed loop, confirmed on `iv-canary-e`, which had to be deleted unprovisioned.
+`--prompt` is the only way into a VM that does not exist yet.
+
+#### Quoting
+
+Three levels, and all three matter:
+
+- **double** quotes around the whole `-d` payload;
+- **single** quotes around the `--prompt` value (it contains `&&` and `~`);
+- **escaped double** quotes (`\"`) around the `bash -lc` payload.
+
+Also: the `-C` in `git -C ~/iv-provision checkout` is **git's** flag. It must stay
+attached to `git` and never drift onto `curl`, or the checkout lands in the wrong
+directory.
+
+#### `context deadline exceeded` is NOT a failure
+
+The call returns:
 
 ```
---prompt='git clone https://github.com/kylelundstedt/iv-provision.git ~/iv-provision && git -C ~/iv-provision checkout 3.0.16 && ~/iv-provision/provision-iv.sh'
+"error":"Error running Shelley prompt: context deadline exceeded"
 ```
 
-Note the `-C` in `git -C ~/iv-provision checkout` is **git's** flag, not curl's.
-Dropping it (or letting it reach `curl`) checks out in the wrong directory.
+**with HTTP 200, on a run that succeeded.** exe.dev is reporting that the prompt
+session ended before it got a reply -- which is exactly what happens when
+`provision-iv.sh` restarts Shelley. It says nothing about the outcome.
+
+Measured on `iv-canary-j`: provisioning **completed at +28s** and the API returned
+that error at **+30s**. The error arrived two seconds *after* the work was
+finished.
+
+So never report it as a failure, never recreate on it, and never "repair" a VM
+because of it. The lock file is the only verdict.
 
 ### exeslim -- deployment targets
 
@@ -149,20 +172,25 @@ works). Catch that before submitting -- it is a confusing error otherwise.
 A 200 from `new` means **the VM was created**. It does not mean the VM is ready,
 and it says nothing about provisioning. Do not report success yet.
 
-1. Report the name and URL exe.dev returned.
-2. Wait for the tailnet. Poll every ~20s, up to ~4 minutes:
+1. Report the name and URL exe.dev returned. Ignore any `context deadline
+   exceeded` in the response.
+2. **Wait for the tailnet.** The VM joins partway through `provision-iv.sh`
+   (`install_tailscale` runs first, `install_shelley` last), so its appearance
+   proves the prompt was received and the run is under way. Poll every 10s:
 
    ```bash
    tailscale status | grep -w <name>
    ```
 
-3. Provision over SSH (command above). Expect it to take several minutes.
-4. **Verify, do not assume.** The lock file is written at the *end* of a
-   successful run, so its presence is most of the signal -- but check the
-   revision, not just that a version string exists:
+   Note this is a *progress* signal, not a completion one -- a VM can be on the
+   tailnet with provisioning still running, or (without `systemd-run`) dead.
+
+3. **Verify completion.** Once on the tailnet, `ssh <name>` works (Tailscale SSH,
+   keyless). Poll for the lock, which is written at the very end of a successful
+   run:
 
    ```bash
-   ssh <name> 'grep -E "^(provision_repo_sha|apex_version|tailscale_version)=" ~/iv-provision.lock'
+   ssh <name> 'grep -E "^(provision_repo_sha|shelley_version|apex_version)=" ~/iv-provision.lock'
    ```
 
    `provision_repo_sha` must match the tag you pinned. A lock recording some
@@ -170,13 +198,60 @@ and it says nothing about provisioning. Do not report success yet.
    quietly ran an older recipe -- and a bare "is apex_version set?" check passes
    straight through it.
 
+4. Corroborate with the unit itself, which is the cleanest single check:
+
+   ```bash
+   ssh <name> 'systemctl show iv-provision -p Result --value; systemctl is-active shelley.service'
+   ```
+
+   Expect `success` and `active`.
+
 5. Only then report success, naming the sha you verified.
+
+**On timing:** a full provision has been measured at **~28 seconds** from `new`
+to lock (`iv-canary-j`, 2026-08-23) -- fast because it is ~10 pinned release
+binaries pulled at data-center bandwidth. Do not hard-code that as an
+expectation; poll for the lock rather than sleeping a fixed interval. But do not
+assume minutes either: if nothing has happened after ~2 minutes, something is
+wrong.
 
 ## When something fails
 
-**`context deadline exceeded` is not a failure of the VM.** It is the expected
-return when a `--prompt` session outlives its context. Read it as "VM exists,
-provisioning unfinished" -- then SSH in and provision, do not recreate.
+**`context deadline exceeded` is not a failure.** See above -- it has been
+observed on a run that completed two seconds earlier. Go verify; do not recreate.
+
+**If the lock exists but records the wrong sha**, provisioning ran an older
+recipe. Re-provision at the right tag over the tailnet:
+
+```bash
+ssh <name> 'cd ~/iv-provision && git fetch --tags --quiet && git checkout --detach 3.0.16 && ~/iv-provision/provision-iv.sh'
+```
+
+**If the VM is on the tailnet but the lock never appears**, provisioning started
+and died. The usual cause is the Shelley self-kill -- check whether the prompt
+actually used `systemd-run`. Diagnose and finish over the tailnet:
+
+```bash
+ssh <name> 'sudo journalctl -u iv-provision --no-pager | tail -30'
+ssh <name> '~/iv-provision/provision-iv.sh'
+```
+
+**If the VM never joins the tailnet**, provisioning did not run at all.
+Recovery depends on who is asking:
+
+- **From this VM there is no way in.** Not on the tailnet, and the exe.dev edge
+  refuses a fleet VM's key by design. Report the situation honestly and hand it
+  back -- do not claim a usable VM.
+- **From a laptop with the account's exe.dev key**, the edge works:
+
+  ```bash
+  ssh <name>.exe.xyz "git clone https://github.com/kylelundstedt/iv-provision.git ~/iv-provision \
+    && git -C ~/iv-provision checkout 3.0.16 \
+    && ~/iv-provision/provision-iv.sh"
+  ```
+
+- Or re-send the prompt from the **Prompt Shelley** box on exe.dev, which reaches
+  the VM's Shelley the same way `--prompt` did.
 
 Anything that leaves a VM half-provisioned is repaired the same way: re-run
 `provision-iv.sh`. It is idempotent, and re-provisioning in place is the normal
