@@ -264,6 +264,56 @@ read is that it is one feature, not a platform.
 
 ---
 
+## Postscript: DuckLake already forks datasets, better
+
+The evaluation was framed around Cloud Disk's CoW fork as the feature that
+would justify adoption. It does not, because IV's existing DuckLake
+architecture already has a better one.
+
+Measured on this VM (DuckLake catalog + partitioned Parquet, `DATA_PATH` on
+local disk):
+
+| | |
+|---|---|
+| Fork = copy the catalog | **3 ms** (3.9 MB) |
+| Parquet copied | **none** — 105 MB shared by both catalogs |
+| Independence | fork 3,001,000 rows vs parent 3,000,000 |
+| New Parquet written by the fork | **4,638 bytes** (the delta only) |
+
+The data layer never needs copying because Parquet is immutable, so only the
+small mutable catalog does. A dataset fork is therefore: copy one `.ducklake`
+file, pin a git commit, share the bucket.
+
+| part of a dataset | mutable? | fork mechanism | cost |
+|---|---|---|---|
+| metadata (`.ducklake`) | yes | copy the file | **3 ms**, MB-scale |
+| data (Parquet on Tigris) | **no** | reference the same objects | **free** |
+| code | yes | `git checkout -b` | free |
+
+This beats Cloud Disk's fork on every axis: 3 ms vs 1.75 s, no snapshot-bucket
+prerequisite, no separate-target-bucket rule, no `-prefix` footgun, and the
+result is readable by any S3 client instead of 1,863 opaque `chunk-*` blocks.
+Cloud Disk forks a *disk image* because it cannot see files; DuckLake forks a
+*dataset* because it can.
+
+**With this, nothing in this evaluation argues for adopting Cloud Disk.**
+
+Not tested, and worth testing before relying on it:
+- The same fork with `DATA_PATH` on **Tigris** rather than local disk. The
+  mechanism is identical (the catalog stores `s3://` paths), but it was not
+  measured.
+- **Garbage collection is the sharp edge.** DuckLake expiry/cleanup on the
+  parent could delete Parquet that a fork still references. Cloud Disk's
+  bucket-level fork is immune to this by construction; a catalog-level fork is
+  not. This is the failure mode the design would actually hit.
+
+Also note: exe.dev root is **ext4**, so `cp --reflink=always` fails with
+`Operation not supported` — a "just copy the folder" local adapter is a full
+byte copy, not a CoW fork. Filesystem-level CoW would need btrfs/XFS/ZFS.
+DuckLake's catalog-copy fork sidesteps this entirely.
+
+---
+
 ## Failure modes found
 
 Each is reproduced by `suite/tests/test_f_findings.py`. cloud-disk is in beta;
