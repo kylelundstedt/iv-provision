@@ -9,6 +9,12 @@ expected_value() {
   sed -nE "s/^$1=//p" "$repo/provision-iv.sh" | head -1
 }
 
+# On-demand cloud CLIs are pinned in bin/install-cloud-cli, not provision-iv.sh,
+# and in `${VAR:-default}` form so the caller can override. Unwrap the default.
+expected_cloud_value() {
+  sed -nE "s/^$1=\\\$\\{$1:-([^}]+)\\}.*/\\1/p" "$repo/bin/install-cloud-cli" | head -1
+}
+
 actual_duckdb=$(/usr/local/bin/duckdb --version | awk '{sub(/^v/, "", $1); print $1}')
 actual_aws=$(/usr/local/bin/aws --version 2>&1 | sed -nE 's#aws-cli/([^ ]+).*#\1#p' || true)
 actual_tigris=$(/usr/local/bin/tigris --version | head -1 | sed 's/^v//')
@@ -21,7 +27,16 @@ actual_shelley_sha256=$(sha256sum /usr/local/bin/shelley | awk '{print $1}')
 actual_apex=$(/usr/local/bin/apex --version | awk 'NR == 1 {print $2}')
 
 [[ $actual_duckdb == "$(expected_value DUCKDB_VERSION)" ]]
-[[ $actual_aws == "$(expected_value AWS_CLI_VERSION)" ]]
+# aws is ON-DEMAND (`install-cloud-cli aws`, 2026-07-28), so it is absent on most
+# VMs and its pin lives in that script rather than provision-iv.sh. This line
+# used to read `expected_value AWS_CLI_VERSION` against provision-iv.sh, where
+# the pin no longer exists -- so it compared the installed version against the
+# empty string. That passes on a VM without aws (both sides empty) and FAILS on
+# any VM where someone ran `install-cloud-cli aws`: green on fresh canaries,
+# broken on iv-provision itself. Check it only when installed, like rclone below.
+if [[ -n $actual_aws ]]; then
+  [[ $actual_aws == "$(expected_cloud_value AWS_CLI_VERSION)" ]]
+fi
 [[ $actual_tigris == "$(expected_value TIGRIS_VERSION)" ]]
 if [[ -n $actual_rclone ]]; then
   [[ $actual_rclone == "$(expected_value RCLONE_VERSION)" ]]
