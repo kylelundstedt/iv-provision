@@ -18,6 +18,12 @@
 # is the ONLY step that touches upstream/node.
 #
 # Installs into a throwaway HOME so your real ~/.agents/skills is left untouched.
+#
+# SCOPE: this script owns ./skills ENTIRELY -- it `rm -rf`s that directory below
+# and rebuilds it from the manifest. Never put a hand-written skill there; the
+# next run deletes it with no error and nothing in the diff to say why. In-tree
+# skills live in ./skills-local, which this script does not touch and
+# provision-iv.sh installs alongside the vendored set.
 set -euo pipefail
 cd "$(dirname "$0")"
 

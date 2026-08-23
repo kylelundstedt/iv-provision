@@ -1094,6 +1094,23 @@ TEAM_SKILLS="$HOME/.agents/iv-team-skills.list"
 NEW_SKILLS="$TMP/team-skills"
 mkdir -p "$NEW_SKILLS"
 cp -a "$IV_REPO/skills/." "$NEW_SKILLS/"
+
+# TWO sources, deliberately kept apart on disk:
+#
+#   skills/        VENDORED from provisioning/skills.manifest by vendor-skills.sh,
+#                  which `rm -rf`s that directory and repopulates it from
+#                  upstream. Nothing hand-written can live there -- it would be
+#                  deleted by the next re-vendor, silently, with no diff that
+#                  explains why.
+#   skills-local/  HAND-WRITTEN, in-tree, reviewed alongside the code they
+#                  describe (join-tailnet, upgrade-vm, create-vm).
+#                  vendor-skills.sh never touches this path.
+#
+# Both install identically and both are recorded in the team-skills list, so a
+# skill dropped from either source is still cleaned up on the next run.
+if [[ -d $IV_REPO/skills-local ]]; then
+  cp -a "$IV_REPO/skills-local/." "$NEW_SKILLS/"
+fi
 find "$NEW_SKILLS" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort > "$TMP/team-skills.list"
 
 if [[ -f $TEAM_SKILLS ]]; then
