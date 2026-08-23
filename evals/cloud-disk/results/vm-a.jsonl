@@ -270,3 +270,29 @@
 {"run_id": "C7", "ts": 1787475673.4989583, "test": "C", "arm": "cloud-disk", "metric": "c1_fork_independent", "value": true, "unit": "bool", "parent_marker_leaked": false, "parent_db_unchanged": true}
 {"run_id": "C7", "ts": 1787475675.8142529, "test": "C", "arm": "cloud-disk", "metric": "c1_parent_bucket_after_fork", "value": 4326220398, "unit": "B", "objects": 10564}
 {"run_id": "C7", "ts": 1787475677.518857, "test": "C", "arm": "cloud-disk", "metric": "c1_fork_bucket_bytes", "value": 4326417071, "unit": "B", "objects": 10554, "note": "listed size of a CoW fork; billed size may differ"}
+{"run_id": "G1", "ts": 1787498899.5622919, "test": "B", "arm": "tigrisfs", "metric": "b1_parquet_write_s", "value": 32.125, "unit": "s", "rows": 40000000, "bytes": 526388908, "mb_per_s": 16.4}
+{"run_id": "G1", "ts": 1787498900.2038429, "test": "G", "arm": "tigrisfs", "metric": "g1_parquet_scan_s", "value": 0.387, "unit": "s", "ok": true, "err": ""}
+{"run_id": "G1", "ts": 1787498901.3110983, "test": "G", "arm": "tigrisfs", "metric": "g1_parquet_point_s", "value": 1.106, "unit": "s", "ok": true, "err": ""}
+{"run_id": "G1", "ts": 1787498901.7282345, "test": "G", "arm": "tigrisfs", "metric": "g1_bucket_keys_readable", "value": true, "unit": "bool", "sample": ["bench/pq/", "bench/pq/part=0/", "bench/pq/part=1/"]}
+{"run_id": "G1", "ts": 1787498901.7412546, "test": "G", "arm": "tigrisfs", "metric": "g1_object_is_real_parquet", "value": false, "unit": "bool", "magic": ""}
+{"run_id": "G1", "ts": 1787499113.7266521, "test": "B", "arm": "tigrisfs", "metric": "b2_small_build_s", "value": 13.682, "unit": "s", "rows": 1500000, "db_bytes": 125054976}
+{"run_id": "G1", "ts": 1787499114.1598175, "test": "B", "arm": "tigrisfs", "metric": "b2_small_full_scan_s", "value": 0.365, "unit": "s", "db_bytes": 125054976}
+{"run_id": "G1", "ts": 1787499114.8463821, "test": "B", "arm": "tigrisfs", "metric": "b2_small_random_read_s", "value": 0.644, "unit": "s", "iteration": 0, "db_bytes": 125054976}
+{"run_id": "G1", "ts": 1787499115.372031, "test": "B", "arm": "tigrisfs", "metric": "b2_small_random_read_s", "value": 0.487, "unit": "s", "iteration": 1, "db_bytes": 125054976}
+{"run_id": "G1", "ts": 1787499115.7529173, "test": "B", "arm": "tigrisfs", "metric": "b2_small_random_read_s", "value": 0.357, "unit": "s", "iteration": 2, "db_bytes": 125054976}
+{"run_id": "G1", "ts": 1787499116.1061673, "test": "B", "arm": "tigrisfs", "metric": "b2_small_random_read_warm_s", "value": 0.353, "unit": "s", "db_bytes": 125054976}
+{"run_id": "G1", "ts": 1787499528.1390777, "test": "B", "arm": "tigrisfs", "metric": "b2_big_build_s", "value": 180.69, "unit": "s", "rows": 30000000, "db_bytes": 2373201920}
+{"run_id": "G1", "ts": 1787499534.2197268, "test": "B", "arm": "tigrisfs", "metric": "b2_big_full_scan_s", "value": 5.975, "unit": "s", "db_bytes": 2373201920}
+{"run_id": "G1", "ts": 1787499541.1522808, "test": "B", "arm": "tigrisfs", "metric": "b2_big_random_read_s", "value": 6.883, "unit": "s", "iteration": 0, "db_bytes": 2373201920}
+{"run_id": "G1", "ts": 1787499549.4152906, "test": "B", "arm": "tigrisfs", "metric": "b2_big_random_read_s", "value": 8.198, "unit": "s", "iteration": 1, "db_bytes": 2373201920}
+{"run_id": "G1", "ts": 1787499557.8937297, "test": "B", "arm": "tigrisfs", "metric": "b2_big_random_read_s", "value": 8.419, "unit": "s", "iteration": 2, "db_bytes": 2373201920}
+{"run_id": "G1", "ts": 1787499565.6444685, "test": "B", "arm": "tigrisfs", "metric": "b2_big_random_read_warm_s", "value": 7.75, "unit": "s", "db_bytes": 2373201920}
+{"run_id": "G1", "ts": 1787499848.291337, "test": "B", "arm": "tigrisfs", "metric": "b1b_dd_write_s", "value": 72.564, "unit": "s", "mb": 1024, "mb_per_s": 14.1}
+{"run_id": "G1", "ts": 1787499861.5975792, "test": "B", "arm": "tigrisfs", "metric": "b3_fsync_ops_per_s", "value": 15.4, "unit": "ops/s", "n": 200, "block": 4096, "elapsed_s": 12.957}
+{"run_id": "G1", "ts": 1787499872.8616486, "test": "B", "arm": "tigrisfs", "metric": "b3b_checkpoint_cycle_s", "value": 6.401, "unit": "s", "cycles": 6, "per_cycle_s": 1.067}
+{"run_id": "G1", "ts": 1787500051.6628182, "test": "G", "arm": "tigrisfs", "metric": "g4_local_mounted", "value": true, "unit": "bool"}
+{"run_id": "G1", "ts": 1787500056.384812, "test": "G", "arm": "tigrisfs", "metric": "g4_second_host_mounted", "value": true, "unit": "bool", "output": "MOUNTED | \u2502    int64     \u2502 | \u251c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2524 | \u2502     40000000 \u2502 | \u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518 | Warning: Permanently added 'iv-cloud-disk-b' (ED25519) to the list of known hosts. | "}
+{"run_id": "G1", "ts": 1787500056.3850322, "test": "G", "arm": "tigrisfs", "metric": "g4_second_host_query_ok", "value": true, "unit": "bool"}
+{"run_id": "G2", "ts": 1787500078.1318853, "test": "G", "arm": "tigrisfs", "metric": "g1_bucket_keys_readable", "value": true, "unit": "bool", "parquet_files": 8, "total_keys": 17, "sample": ["bench/pq/part=0/data_0.parquet", "bench/pq/part=1/data_0.parquet"]}
+{"run_id": "G2", "ts": 1787500078.1324482, "test": "G", "arm": "tigrisfs", "metric": "g1_object_is_real_parquet", "value": true, "unit": "bool", "magic": "b'PAR1'"}
+{"run_id": "G2", "ts": 1787500078.1328049, "test": "G", "arm": "tigrisfs", "metric": "g1_bucket_bytes", "value": 526388908, "unit": "B", "objects": 17, "logical_bytes": 526388908, "overhead_ratio": 1.0}

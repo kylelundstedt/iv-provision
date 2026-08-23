@@ -22,6 +22,12 @@ same bucket without an explicit `-prefix` are silently the same volume**, both
 mountable read-write at once, and deleting either destroys both. Any IV
 adoption must set `-prefix` on every disk. That is a footgun, not a preference.
 
+**Also tested: [TigrisFS](#tigrisfs-vs-cloud-disk) as the alternative.** It wins
+decisively for Parquet (1.0× storage vs 1.75×, objects stay readable by any S3
+client, N hosts can mount concurrently — which Cloud Disk cannot). It loses
+decisively for `.duckdb` (8.2s vs 0.54s random reads, 15×). **Use both: TigrisFS
+for Parquet, Cloud Disk for `.duckdb`.**
+
 ---
 
 ## Results
@@ -144,6 +150,83 @@ The fencing story is **safe but not shareable**. A lease steal never silently
 succeeded: the evicted writer always got EIO rather than both sides writing.
 But the same-host case does treat a live mount as crash recovery — reproduced
 here, epoch 1→2, matching the behaviour reported on `iv-provision`.
+
+---
+
+## TigrisFS vs Cloud Disk
+
+TigrisFS 1.2.1 (a GeeseFS fork, FUSE, file→object) mounted over bucket
+`cdbench-fs`, same workloads, same harness (`suite/tests/test_g_tigrisfs.py`).
+The question: does IV need Cloud Disk's block device at all?
+
+| workload | local | Cloud Disk (tuned) | **TigrisFS** | winner |
+|---|---|---|---|---|
+| Parquet build, 40M rows (s) | 29.2 | 30.1 | **32.1** | tie |
+| Parquet scan (s) | 0.37¹ | 0.36 | **0.39** | tie |
+| Parquet point lookup (s) | – | 0.54 | **1.11** | Cloud Disk, mildly |
+| **Random read, 2.4GB `.duckdb` (s)** | 0.455 | **0.536** | **8.198** | **Cloud Disk, 15×** |
+| Full scan, 2.4GB `.duckdb` (s) | 0.366 | 0.355 | 5.975 | Cloud Disk, 17× |
+| Build 2.4GB `.duckdb` (s) | 34.3 | 33.5 | **180.7** | Cloud Disk, 5.4× |
+| Random read, 123MB `.duckdb` (s) | 0.059 | 0.069 | 0.487 | Cloud Disk, 7× |
+| 4K fsync (ops/s) | 799 | 345 | **15.4** | Cloud Disk, 22× |
+| DuckDB checkpoint cycle (s) | 0.48 | 0.50 | 6.40 | Cloud Disk, 13× |
+| Streaming write, dd (MB/s) | 815 | 177–285 | **14.1** | Cloud Disk, 13× |
+| **Storage amplification** | – | 1.746× | **1.0000×** | **TigrisFS** |
+| **Objects readable without a mount** | – | **no** | **yes** | **TigrisFS** |
+| **Concurrent readers, 2 hosts** | – | **no** (exclusive lease) | **yes** | **TigrisFS** |
+
+¹ httpfs-on-Parquet, for reference, was 20.3s — both mounts crush it.
+
+The hypothesis held exactly. **TigrisFS is fine for whole-file Parquet and bad
+for anything written in place**, because DuckDB updates random offsets inside
+one large file and a file→object layer has to read-modify-write the object.
+15.4 fsync/s is worse than Cloud Disk's *durable* write-through mode (6.2/s is
+the only thing slower).
+
+But the three rows at the bottom are the ones that matter for IV:
+
+- **1.0000× storage.** 526,388,908 bytes of Parquet occupied 526,388,908 bytes
+  in the bucket, across 17 keys. Cloud Disk turned 1.12GB into 1,863 opaque
+  `chunk-*` objects at 1.746×. **That halves the storage bill** and removes the
+  amplification caveat from the cost model entirely.
+- **The objects are just files.** `g1_object_is_real_parquet=True` — a plain
+  boto3 client read key `bench/pq/part=0/data_0.parquet` and got `b'PAR1'`.
+  Any consumer (duckdb/httpfs, a client, a Dive) can read the dataset with no
+  mount, no daemon, no lease. Cloud Disk's bucket is unreadable by anything
+  except another Cloud Disk mount.
+- **N hosts can read at once.** Both VMs mounted `cdbench-fs` simultaneously and
+  each counted 40,000,000 rows. This is the fan-out serving story that Cloud
+  Disk **cannot** do — its read-only mounts still take the exclusive lease.
+
+TigrisFS also has none of F1–F5, F7: no prefix collision, no NBD layer, no
+10-minute D-state hang, no 16-device ceiling, no lease semantics.
+
+**Conclusion: they are complementary, not competing.**
+
+| use | tool |
+|---|---|
+| Parquet datasets, served to many consumers | **TigrisFS** — or nothing at all: the objects are plain files |
+| `.duckdb` files, queried repeatedly | **Cloud Disk**, `-preset database` |
+| Dataset versioning / staging clones | **Cloud Disk** — CoW forks, 1.75s |
+| Building anything | **local disk**, then publish |
+
+If IV's datasets are mostly Parquet, **TigrisFS is the better default and Cloud
+Disk's remaining unique value is CoW forking.** Whether that alone justifies
+Cloud Disk's operational surface (F1–F7) is a judgement call, but the honest
+read is that it is one feature, not a platform.
+
+### TigrisFS caveats found
+
+- **`/dev/fuse` is `0600 root:root` on exe.dev VMs** (normally `0666`), so
+  unprivileged mounts fail with `failed to open /dev/fuse: Permission denied`.
+  TigrisFS must be mounted with `sudo` here.
+- **`-o allow_other` is not enough**: the mount is root-owned, so every file
+  appears root-owned and non-root writes fail. Needs
+  `--uid $(id -u) --gid $(id -g) --file-mode 0644 --dir-mode 0755`.
+- Untested: durability under crash/host loss, forking, `ReadOnlyMany` under
+  *write* contention, and whether concurrent *writers* are safe (FUSE docs warn
+  about multi-user mountpoints). **Do not assume the durability results in this
+  report transfer to TigrisFS — they were not measured.**
 
 ---
 
@@ -292,8 +375,12 @@ write-once dataset lower. Worth re-measuring at IV scale before committing.
   ephemeral, use `write-back=false` and accept 6 fsync/s, or don't use Cloud
   Disk for that step.
 - **Fan-out read serving.** `ReadOnlyMany` does not work in 1.8.0 — read-only
-  mounts take the exclusive lease. One reader at a time. If you need N readers,
-  use N forks (cheap) or serve Parquet from the bucket.
+  mounts take the exclusive lease. One reader at a time. **Use TigrisFS
+  instead**: two hosts mounted the same bucket concurrently and both queried
+  40M rows (measured). Or N forks (cheap), or plain httpfs.
+- **Parquet-only datasets.** TigrisFS matches it on speed (0.39s vs 0.36s scan),
+  at 1.0× storage instead of 1.75×, with the objects readable by any S3 client
+  and no lease. Cloud Disk buys you nothing here except forking.
 - **More than 16 disks per VM.** Hard `nbds_max` ceiling.
 - **Streaming-write-bound bulk loads.** 176 MB/s tuned vs 814 MB/s local, 0.22×.
   Fine for a 30s Parquet build (CPU-bound anyway, 0.97×), bad for a
@@ -314,6 +401,9 @@ write-once dataset lower. Worth re-measuring at IV scale before committing.
   1.2× of local disk, 40× faster than httpfs-on-Parquet.
 - **Datasets larger than the VM's disk** — a 40GB disk on a 60GB box, paying
   only for what is written.
+- **`.duckdb` files specifically** — 15× faster than TigrisFS on random reads
+  over a 2.4GB database, and 5.4× faster to build one. This is the workload
+  where the block device genuinely earns its keep.
 
 ## Recommended configuration, if IV adopts this
 
@@ -383,6 +473,7 @@ suite/
   tests/test_c_lifecycle.py     C: snapshot, fork, portability, cost
   tests/test_d_concurrency.py   D: leases, ReadOnlyMany, reboot
   tests/test_f_findings.py      F: reproductions of every failure mode
+  tests/test_g_tigrisfs.py      G: TigrisFS arm, same workloads
   report.py              aggregate jsonl -> tables / DuckDB
   sync.sh                ship suite to a VM and run a module
   run_multihost.sh       drive the two-VM tests from a controller
