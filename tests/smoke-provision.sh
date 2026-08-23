@@ -82,9 +82,16 @@ done < "$HOME/.agents/iv-team-skills.list"
 # is LISTED got installed, so it passes vacuously if skills-local/ stops being
 # copied at all -- which is precisely the regression to catch, since these are
 # the skills that are not recoverable from the manifest.
-for name in join-tailnet upgrade-vm create-vm; do
+for name in join-tailnet upgrade-vm create-vm create-repo; do
   test -f "$HOME/.agents/skills/$name/SKILL.md"
   grep -qx "$name" "$HOME/.agents/iv-team-skills.list"
+done
+
+# create-repo ships executables, not just prose. `cp -a` preserves the mode, but
+# only if the mode was committed -- a skill whose scripts arrive non-executable
+# fails at use time with a bare "Permission denied" and no hint of why.
+for s in gh-mcp.sh push-tree.sh; do
+  test -x "$HOME/.agents/skills/create-repo/$s"
 done
 
 test -f "$lock"
