@@ -15,14 +15,8 @@
 # One "host:repo-path-relative-to-home" per line, e.g.
 #   iv-foundry-stage2:worktrees/fannie-sflpd-preauth-20260727
 #
-# Currently empty, and correctly so. The one outstanding candidate --
-# iv-foundry-stage2's worktrees/fannie-sflpd-preauth-20260727, a dated pre-auth
-# snapshot whose main was an unrelated history -- was resolved by deleting the
-# clone rather than excusing it (verified absent 2026-08-18). Deleting is the
-# preferred resolution: an exclusion is permanent policy, a snapshot is not.
-#
-# Moved here from kylelundstedt/dotfiles (2026-08-18). It is fleet policy about
-# which repositories' provenance may be allowed to die, not personal config, so
-# it belongs beside the other provisioning manifests. `entire-push-check` itself
-# stays in dotfiles: it is macOS-only (it requires klundstedt-mini and self-skips
-# elsewhere) and is the auditing control plane, not something the audited VMs run.
+# Currently empty. One known candidate is outstanding and deliberately NOT
+# excused pending a decision: iv-foundry-stage2's
+# worktrees/fannie-sflpd-preauth-20260727, a dated pre-auth snapshot whose main
+# is an unrelated history ("Initial commit"). Either delete the clone or excuse
+# it here — see agent_docs/vm-disposability.md.

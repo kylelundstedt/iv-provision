@@ -1,0 +1,426 @@
+#!/usr/bin/env bash
+# prune-disk — reclaim regenerable disk on an IV-provisioned host.
+#
+# Dry-run by default. Nothing is deleted without --apply.
+#
+# Removes only things that are provably stale or regenerate on demand:
+#   claude   stale Claude Code version binaries (~250 MB each, never pruned
+#            by the installer) — keeps the one ~/.local/bin/claude points at
+#   node     stale fnm node versions — keeps the `default` alias target
+#   caches   uv / go-build / npm caches, via each tool's own prune command
+#            when available, otherwise by removing the cache directory
+#   zed      ~/.zed_server + ~/.local/share/zed, re-fetched on next connect
+#   quarto   ~/.local/share/quarto, ONLY with --quarto and ONLY when the host
+#            serves no Quarto site (opt-in: this one is lane-dependent)
+#
+# With --system (Linux only, needs sudo) it also reclaims OUTSIDE $HOME:
+#   tmp      /tmp entries older than --tmp-age days, minus protected ones
+#   journal  systemd journal vacuumed down to --journal-cap
+#   apt      apt's downloaded .deb cache
+#
+# Three guards are load-bearing and must not be relaxed — all three come from
+# real bugs (see agent_docs/vm-disk-weight.md and exe-dev-remediation.md):
+#   1. Never remove the sole Claude version, and never trust the symlink to
+#      resolve into versions/ — fall back to newest-by-mtime.
+#   2. fnm's aliases/default resolves to <version>/installation, not to a
+#      version directory. If it cannot be resolved to a real version, claim
+#      nothing rather than everything.
+#   3. /tmp IS NOT SCRATCH. Measured 2026-07-28: it held git repos with
+#      local-only commits — including /tmp/shelley-review on iv-docs, 9 commits
+#      against boldsoftware/shelley, a vendor repo we cannot push to. The
+#      earlier disposability audit missed these because it only walked $HOME.
+#      An entry is PROTECTED, never deleted, if it contains a git repo with a
+#      real (http/ssh) remote and commits on no remote-tracking ref.
+#
+#      Repos with no remote, or whose remote is a local path, are NOT protected:
+#      those are scratch clones of something else already on the box (pytest
+#      fixtures, `git clone /home/exedev/thoughts/.` review sandboxes). This
+#      distinction is what makes the rule useful rather than a blanket refusal —
+#      pytest alone accounted for 920 MB of disposable fixture repos.
+#
+# Runs on macOS and Linux. Safe to re-run.
+
+set -uo pipefail
+
+APPLY=false
+DO_QUARTO=false
+DO_SYSTEM=false
+TMP_AGE=7
+JOURNAL_CAP=50M
+
+usage() {
+    cat <<'EOF'
+Usage: prune-disk [--apply] [--quarto] [--system] [--tmp-age N] [--help]
+
+  --apply         actually delete (default is a dry run that changes nothing)
+  --quarto        also drop an unused Quarto install (skipped if a site exists)
+  --system        also reclaim outside $HOME: /tmp, systemd journal, apt cache
+                  (Linux only; needs passwordless sudo)
+  --tmp-age N     only consider /tmp entries older than N days (default 7)
+  --journal-cap S vacuum the journal down to S (default 50M)
+
+/tmp entries are never deleted if they contain a git repo with a real remote
+and unpushed commits; those are listed as PROTECTED so they can be dealt with.
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --apply)  APPLY=true; shift ;;
+        --quarto) DO_QUARTO=true; shift ;;
+        --system) DO_SYSTEM=true; shift ;;
+        --tmp-age) TMP_AGE="${2:?--tmp-age needs a value}"; shift 2 ;;
+        --journal-cap) JOURNAL_CAP="${2:?--journal-cap needs a value}"; shift 2 ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "prune-disk: unknown argument: $1" >&2; usage >&2; exit 2 ;;
+    esac
+done
+
+[[ "$TMP_AGE" =~ ^[0-9]+$ ]] || { echo "prune-disk: --tmp-age must be an integer" >&2; exit 2; }
+
+# --- helpers ---------------------------------------------------------------
+
+# Size of a path in KiB, 0 when absent.
+sz() { [[ -e "$1" ]] && du -sk "$1" 2>/dev/null | awk '{print $1}' || echo 0; }
+
+human() { awk -v k="$1" 'BEGIN{
+    if (k >= 1048576) printf "%.2f GB", k/1048576;
+    else if (k >= 1024) printf "%.0f MB", k/1024;
+    else printf "%d KB", k
+}'; }
+
+TOTAL=0
+declare -a PLAN=()
+
+# note <category> <bytes_kib> <description>
+note() {
+    TOTAL=$((TOTAL + $2))
+    PLAN+=("$(printf '  %-8s %10s  %s' "$1" "$(human "$2")" "$3")")
+}
+
+say() { printf '%s\n' "$*"; }
+
+before_used() { df -k "$HOME" | tail -1 | awk '{print $3}'; }
+
+# --- claude ----------------------------------------------------------------
+
+CLAUDE_DIR="$HOME/.local/share/claude/versions"
+claude_current=""
+claude_stale=()
+
+scan_claude() {
+    [[ -d "$CLAUDE_DIR" ]] || return 0
+
+    local link
+    link="$(readlink -f "$HOME/.local/bin/claude" 2>/dev/null || true)"
+    case "$link" in
+        "$CLAUDE_DIR"/*) claude_current="$(basename "$link")" ;;
+    esac
+    # Guard 1a: symlink did not resolve into versions/ — fall back to newest.
+    [[ -n "$claude_current" ]] || claude_current="$(ls -t "$CLAUDE_DIR" 2>/dev/null | head -1)"
+
+    local count=0 v
+    for v in "$CLAUDE_DIR"/*; do
+        [[ -e "$v" ]] || continue
+        count=$((count + 1))
+    done
+    # Guard 1b: never touch a lone version.
+    if (( count <= 1 )); then
+        return 0
+    fi
+
+    local bytes=0 b
+    for v in "$CLAUDE_DIR"/*; do
+        [[ -e "$v" ]] || continue
+        [[ "$(basename "$v")" == "$claude_current" ]] && continue
+        b=$(sz "$v")
+        bytes=$((bytes + b))
+        claude_stale+=("$v")
+    done
+
+    (( bytes > 0 )) && note claude "$bytes" \
+        "${#claude_stale[@]} stale version(s), keeping $claude_current"
+}
+
+# --- fnm node --------------------------------------------------------------
+
+FNM_DIR="$HOME/.local/share/fnm/node-versions"
+node_stale=()
+
+scan_node() {
+    [[ -d "$FNM_DIR" ]] || return 0
+
+    local dl dflt
+    dl="$(readlink -f "$HOME/.local/share/fnm/aliases/default" 2>/dev/null || true)"
+    # fnm layout: aliases/default -> ../node-versions/<version>/installation
+    [[ "$dl" == */installation ]] && dl="$(dirname "$dl")"
+    dflt="$(basename "${dl:-}" 2>/dev/null || true)"
+
+    # Guard 2: default not resolvable to a real version dir — claim nothing.
+    if [[ -z "$dflt" || ! -d "$FNM_DIR/$dflt" ]]; then
+        say "  note: fnm default unresolved — skipping node (nothing claimed)"
+        return 0
+    fi
+
+    local bytes=0 b v
+    for v in "$FNM_DIR"/*; do
+        [[ -e "$v" ]] || continue
+        [[ "$(basename "$v")" == "$dflt" ]] && continue
+        b=$(sz "$v")
+        bytes=$((bytes + b))
+        node_stale+=("$v")
+    done
+
+    (( bytes > 0 )) && note node "$bytes" \
+        "${#node_stale[@]} stale version(s), keeping $dflt"
+}
+
+# --- caches ----------------------------------------------------------------
+# Prefer each tool's own prune (keeps entries still in use); fall back to
+# removing the directory, which is safe for a cache but less surgical.
+
+cache_paths=()
+
+scan_caches() {
+    local p b
+    # ~/.cache/pip is here because telnyx-vm carried 2.7 GB of it (2026-07-28)
+    # — a Python box built before the uv-only rule. Its sibling
+    # ~/.cache/whisper (139 MB) is deliberately NOT listed: that is the
+    # transcription model, needed at runtime, and re-downloading it would break
+    # voicemail until it finished.
+    for p in "$HOME/.cache/uv" "$HOME/.cache/go-build" "$HOME/.npm" "$HOME/.cache/pip"; do
+        b=$(sz "$p")
+        (( b > 0 )) || continue
+        cache_paths+=("$p")
+        note cache "$b" "$(basename "$p") (upper bound — native prune keeps live entries)"
+    done
+}
+
+prune_caches() {
+    local p
+    for p in "${cache_paths[@]}"; do
+        case "$p" in
+            */uv)
+                if command -v uv >/dev/null 2>&1; then uv cache prune >/dev/null 2>&1 || rm -rf "$p"
+                else rm -rf "$p"; fi ;;
+            */go-build)
+                if command -v go >/dev/null 2>&1; then go clean -cache >/dev/null 2>&1 || rm -rf "$p"
+                else rm -rf "$p"; fi ;;
+            */.npm)
+                if command -v npm >/dev/null 2>&1; then npm cache clean --force >/dev/null 2>&1 || rm -rf "$p"
+                else rm -rf "$p"; fi ;;
+            */pip)
+                if command -v pip3 >/dev/null 2>&1; then pip3 cache purge >/dev/null 2>&1 || rm -rf "$p"
+                elif command -v pip >/dev/null 2>&1; then pip cache purge >/dev/null 2>&1 || rm -rf "$p"
+                else rm -rf "$p"; fi ;;
+        esac
+    done
+}
+
+# --- zed -------------------------------------------------------------------
+
+zed_paths=()
+
+scan_zed() {
+    local p b
+    for p in "$HOME/.zed_server" "$HOME/.local/share/zed"; do
+        b=$(sz "$p")
+        (( b > 0 )) || continue
+        zed_paths+=("$p")
+        note zed "$b" "$(basename "$p") (re-fetched on next remote connect)"
+    done
+}
+
+# --- quarto (opt-in, lane-dependent) ---------------------------------------
+
+quarto_path=""
+
+scan_quarto() {
+    [[ "$DO_QUARTO" == true ]] || return 0
+    local q="$HOME/.local/share/quarto"
+    local b; b=$(sz "$q")
+    (( b > 0 )) || return 0
+
+    # A vendored tooling clone shipping its own _quarto.yml is not a site.
+    local f d
+    for f in "$HOME"/*/_quarto.yml; do
+        [[ -e "$f" ]] || continue
+        d="$(basename "$(dirname "$f")")"
+        case "$d" in iv-image|dotfiles) continue ;; esac
+        say "  note: Quarto site found ($d) — skipping quarto"
+        return 0
+    done
+
+    quarto_path="$q"
+    note quarto "$b" "unused install, no Quarto site on this host"
+}
+
+# --- system scope (Linux, opt-in via --system) ------------------------------
+
+SUDO=""
+tmp_victims=()
+tmp_protected=()
+journal_before=""
+apt_bytes=0
+
+# Runtime state that must never be touched even when old: live sockets and the
+# private-tmp trees systemd hands to running services.
+tmp_is_runtime() {
+    case "$(basename "$1")" in
+        tmux-*|.X11-unix|.ICE-unix|.font-unix|.Test-unix|.XIM-unix) return 0 ;;
+        systemd-private-*|snap-private-*|ssh-*) return 0 ;;
+    esac
+    # Anything containing a socket is in use by something.
+    [[ -n "$($SUDO find "$1" -type s -print -quit 2>/dev/null)" ]] && return 0
+    return 1
+}
+
+# Guard 3. Protected = contains a git repo with a REAL remote and commits that
+# exist on no remote-tracking ref. A local-path remote (or none) means a scratch
+# clone of something already on this box, which is not durable state.
+tmp_is_protected() {
+    local entry="$1" g r url n
+    while IFS= read -r g; do
+        [[ -n "$g" ]] || continue
+        r="$(dirname "$g")"
+        url="$(git -C "$r" remote get-url origin 2>/dev/null || true)"
+        case "$url" in
+            http://*|https://*|git@*|ssh://*) ;;
+            *) continue ;;   # no remote, or a local path -> scratch
+        esac
+        # --branches HEAD, NOT --all. `--all` includes refs/tags, and a tag
+        # FETCHED FROM UPSTREAM can point at a commit that is on no remote
+        # BRANCH (tagged on a branch that was later deleted or never merged).
+        # --not --remotes only subtracts remote-tracking branches, so those
+        # upstream commits get counted as local work. Measured 2026-07-28 on
+        # /tmp/shelley-review: 9 "unpushed" commits, all reachable from the
+        # upstream tag v0.670.946516660 and all present in
+        # boldsoftware/shelley. Zero were ours. Counting branches and HEAD
+        # instead asks the question that actually matters: is there committed
+        # work here that no remote has?
+        n="$(git -C "$r" rev-list --count --branches HEAD --not --remotes 2>/dev/null || echo 0)"
+        if [[ "${n:-0}" -gt 0 ]]; then
+            tmp_protected+=("$(printf '  %-52s %s unpushed commit(s) -> %s' "$r" "$n" "$url")")
+            return 0
+        fi
+    done < <($SUDO find "$entry" -name .git -maxdepth 6 2>/dev/null)
+    return 1
+}
+
+scan_tmp() {
+    local e b
+    while IFS= read -r e; do
+        [[ -n "$e" ]] || continue
+        tmp_is_runtime "$e" && continue
+        tmp_is_protected "$e" && continue
+        b=$($SUDO du -sxk "$e" 2>/dev/null | awk '{print $1}')
+        [[ "${b:-0}" -gt 0 ]] || continue
+        tmp_victims+=("$e")
+        TOTAL=$((TOTAL + b))
+        PLAN+=("$(printf '  %-8s %10s  %s' tmp "$(human "$b")" "$e")")
+    done < <($SUDO find /tmp -mindepth 1 -maxdepth 1 -mtime "+$TMP_AGE" 2>/dev/null)
+}
+
+scan_journal() {
+    command -v journalctl >/dev/null 2>&1 || return 0
+    journal_before="$($SUDO journalctl --disk-usage 2>/dev/null | grep -oE '[0-9.]+[KMG]' | head -1)"
+    [[ -n "$journal_before" ]] || return 0
+    # Report the current size; the vacuum keeps --journal-cap, so the reclaim is
+    # whatever exceeds it. Reported as an upper bound rather than computed,
+    # since journalctl decides on file boundaries.
+    local kib
+    kib=$(awk -v s="$journal_before" 'BEGIN{
+        v=s+0; u=substr(s,length(s));
+        if(u=="G") print int(v*1048576); else if(u=="M") print int(v*1024); else print int(v)
+    }')
+    (( kib > 0 )) || return 0
+    note journal "$kib" "current journal size (vacuum to $JOURNAL_CAP; upper bound)"
+}
+
+scan_apt() {
+    [[ -d /var/cache/apt ]] || return 0
+    apt_bytes=$($SUDO du -sxk /var/cache/apt 2>/dev/null | awk '{print $1}')
+    [[ "${apt_bytes:-0}" -gt 1024 ]] || { apt_bytes=0; return 0; }
+    note apt "$apt_bytes" "downloaded .deb cache"
+}
+
+scan_system() {
+    [[ "$DO_SYSTEM" == true ]] || return 0
+    if [[ "$(uname -s)" != "Linux" ]]; then
+        say "  note: --system is Linux-only — skipping"
+        DO_SYSTEM=false
+        return 0
+    fi
+    if [[ $EUID -ne 0 ]]; then
+        if sudo -n true 2>/dev/null; then SUDO="sudo -n"
+        else
+            say "  note: --system needs passwordless sudo — skipping system scope"
+            DO_SYSTEM=false
+            return 0
+        fi
+    fi
+    scan_tmp
+    scan_journal
+    scan_apt
+}
+
+# --- run -------------------------------------------------------------------
+
+say "prune-disk on $(hostname -s) — $([[ "$APPLY" == true ]] && echo APPLY || echo 'dry run')"
+say ""
+
+scan_claude
+scan_node
+scan_caches
+scan_zed
+scan_quarto
+scan_system
+
+# Protected paths are reported whether or not anything is reclaimable: the
+# whole point is that they are visible rather than silently skipped.
+if (( ${#tmp_protected[@]} )); then
+    say "  PROTECTED — local-only git work in /tmp, NOT deleted:"
+    printf '%s\n' "${tmp_protected[@]}"
+    say ""
+fi
+
+if (( TOTAL == 0 )); then
+    say "  nothing to reclaim"
+    exit 0
+fi
+
+printf '%s\n' "${PLAN[@]}"
+say ""
+say "  $(printf '%-8s %10s' TOTAL "$(human "$TOTAL")")"
+
+if [[ "$APPLY" != true ]]; then
+    say ""
+    say "  dry run — nothing removed. Re-run with --apply."
+    exit 0
+fi
+
+say ""
+used_before=$(before_used)
+
+for v in "${claude_stale[@]+"${claude_stale[@]}"}"; do rm -rf "$v"; done
+for v in "${node_stale[@]+"${node_stale[@]}"}"; do rm -rf "$v"; done
+prune_caches
+for p in "${zed_paths[@]+"${zed_paths[@]}"}"; do rm -rf "$p"; done
+[[ -n "$quarto_path" ]] && rm -rf "$quarto_path"
+
+if [[ "$DO_SYSTEM" == true ]]; then
+    for p in "${tmp_victims[@]+"${tmp_victims[@]}"}"; do
+        # Belt and braces: re-check immediately before deleting. The scan and
+        # the apply are seconds apart, but a service could have created a
+        # socket in the meantime.
+        tmp_is_runtime "$p" && continue
+        $SUDO rm -rf "$p"
+    done
+    [[ -n "$journal_before" ]] && $SUDO journalctl --vacuum-size="$JOURNAL_CAP" >/dev/null 2>&1
+    (( apt_bytes > 0 )) && $SUDO apt-get clean >/dev/null 2>&1
+fi
+
+used_after=$(before_used)
+freed=$((used_before - used_after))
+(( freed < 0 )) && freed=0
+say "  reclaimed $(human "$freed") (filesystem delta)"
