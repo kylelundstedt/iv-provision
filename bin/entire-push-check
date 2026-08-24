@@ -1,0 +1,184 @@
+#!/usr/bin/env bash
+# Fail-closed check: no repo anywhere in the fleet holds an unpushed Entire
+# checkpoint.
+#
+# Why this exists. Entire records the "why" of agent work on a git ref
+# (entire/checkpoints/*) and ships it via a pre-push hook. That makes it durable
+# — but ONLY on push. A repo that has been checkpointed and never pushed has an
+# Entire record with zero durability: it dies with the VM, silently, and no
+# existing check notices. Found for real on 2026-07-28, when iv-foundry-stage2
+# held 5 unpushed checkpoints on kylelundstedt/fannie-sflpd.
+# See agent_docs/vm-disposability.md.
+#
+# This is the Entire half of the pair; agentsview-coverage is the AgentsView
+# half. Together they assert that both safety nets are WORKING, not merely
+# installed.
+#
+# Runs on the mini; self-skips elsewhere. Pass --dry-run to print findings
+# without pinging.
+set -uo pipefail
+umask 077
+
+DRY_RUN=0
+[[ "${1:-}" == "--dry-run" ]] && DRY_RUN=1
+
+# NO SCHEDULING HARNESS HERE, deliberately.
+#
+# This script is the CHECK: it inspects the fleet and communicates through its
+# exit code and stdout, nothing else. It used to `source ~/dotfiles/backup/_lib.sh`
+# and call job_require_mini / job_hc_init / job_log -- a Keychain read, a macOS
+# log path, and a hard hostname guard that made a fleet-wide check refuse to run
+# anywhere except one laptop.
+#
+# The thing being checked is installed by THIS repo (the Entire CLI, pinned, plus
+# the entire-agent-shelley plugin), so the check belongs next to it and must run
+# from any host that can reach the fleet.
+#
+# Scheduling, healthchecks.io pings and log rotation stay in the personal
+# dotfiles repo as a thin wrapper: it calls this and translates exit status into
+# a ping. That split keeps a dead-man's switch (a check that stops running is
+# itself an alert) without dragging a personal job harness into the team repo.
+#
+#   exit 0  -- no unpushed checkpoints anywhere reachable
+#   exit 1  -- findings, or the check could not run; details on stdout
+fail() {
+    echo "FAIL: $1"
+    exit 1
+}
+
+command -v jq >/dev/null 2>&1 || fail "jq not found"
+
+# Scratch clones that legitimately hold an unpushable Entire ref — e.g. a
+# throwaway snapshot whose main is an unrelated history, where pushing the
+# checkpoint ref would diverge or clobber the real one. One "host:repo" per
+# line. Same fail-closed spirit as agentsview-coverage-exclude.txt: excuse a
+# repo only when its record genuinely does not need to survive, never to
+# silence one you simply have not pushed.
+# Ships with this repo. Resolved relative to the script so it works from a
+# checkout at any path, not just ~/iv-provision.
+EXCLUDE_FILE="${IV_ENTIRE_EXCLUDE:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/provisioning/entire-push-exclude.txt}"
+EXCLUDED=()
+if [[ -f "$EXCLUDE_FILE" ]]; then
+    while IFS= read -r e; do [[ -n "$e" ]] && EXCLUDED+=("$e"); done < <(
+        grep -vE '^[[:space:]]*#|^[[:space:]]*$' "$EXCLUDE_FILE")
+fi
+
+# The probe, run on each host. Deliberately uses absolute paths and no
+# `command -v`: non-interactive SSH gets a PATH without ~/.local/bin, which
+# silently reports user-installed tools as absent (agent_docs/vm-disposability.md).
+# Finds worktrees too — a linked worktree's .git is a FILE, not a directory.
+read -r -d '' PROBE <<'EOS'
+find "$HOME" -name .git -maxdepth 6 \( -type d -o -type f \) 2>/dev/null | while read -r g; do
+    r="$(dirname "$g")"
+    git -C "$r" rev-parse --git-dir >/dev/null 2>&1 || continue
+    # 'refs/heads/entire/**', not 'entire/*': for-each-ref patterns are
+    # pathname-aware, so a single * stops at the slash and matches NOTHING
+    # under entire/checkpoints/v1 — the check passed vacuously until this was
+    # caught by a synthetic unpushed checkpoint.
+    git -C "$r" for-each-ref --format='%(refname:short)' 'refs/heads/entire/**' 2>/dev/null | while read -r ref; do
+        [ -n "$ref" ] || continue
+        n=$(git -C "$r" rev-list --count "$ref" --not --remotes 2>/dev/null || echo 0)
+        [ "$n" -gt 0 ] && echo "${r#"$HOME"/}|$ref|$n"
+    done
+done
+EOS
+
+TS_BIN=$(command -v tailscale || true)
+[[ -n "$TS_BIN" ]] || [[ ! -x /opt/homebrew/bin/tailscale ]] || TS_BIN=/opt/homebrew/bin/tailscale
+[[ -n "$TS_BIN" ]] || fail "tailscale not installed"
+
+TS_JSON=$($TS_BIN status --json 2>/dev/null) || fail "tailscale status unavailable"
+TAILNET=()
+while IFS= read -r h; do [[ -n "$h" ]] && TAILNET+=("$h"); done < <(
+    jq -r '.Peer[]? | select(.Online == true and .OS == "linux") | .HostName' <<<"$TS_JSON" | sort -u)
+
+# Authoritative VM list. Two sources, because this runs on VMs as well as
+# workstations: a VM has no exe.dev SSH key (deliberately) and reaches the
+# control plane through an http-proxy integration instead.
+#
+# Same two-attempt/backoff discipline as agentsview-coverage on the ssh path:
+# exe.dev drops SYNs past an undocumented per-IP rate.
+EXE_API=${IV_EXE_API_URL:-https://api-exe-new.int.exe.xyz}
+EXE_JSON=""
+if EXE_JSON=$(curl -sS --max-time 30 -X POST "$EXE_API/exec" -d 'ls --json' 2>/dev/null) \
+   && jq -e '.vms' >/dev/null 2>&1 <<<"$EXE_JSON"; then
+    :
+else
+    EXE_JSON=""
+    for attempt in 1 2; do
+        EXE_JSON=$(ssh -o ConnectTimeout=25 -o BatchMode=yes exe.dev ls --json 2>/dev/null) && [[ -n "$EXE_JSON" ]] && break
+        EXE_JSON=""
+        [[ $attempt -eq 1 ]] && sleep 45
+    done
+fi
+# FAIL CLOSED. An inventory we cannot read is treated like a tailnet we cannot
+# read: a check that silently narrows its scope is the failure mode this exists
+# to prevent.
+[[ -n "$EXE_JSON" ]] || fail "exe.dev inventory unavailable (integration and ssh both failed)"
+
+EXEVMS=()
+while IFS= read -r h; do [[ -n "$h" ]] && EXEVMS+=("$h"); done < <(
+    jq -r '.vms[]? | select(.status == "running") | .vm_name' <<<"$EXE_JSON" | sort -u)
+
+in_list() { local h=$1; shift; local x; for x in "$@"; do [[ "$x" == "$h" ]] && return 0; done; return 1; }
+
+findings=() checked=0 unreachable=() excused_n=0
+
+record() {  # record <host> <probe-output>
+    local host=$1 out=$2 line repo key
+    while IFS= read -r line; do
+        [[ -n "$line" ]] || continue
+        repo="${line%%|*}"
+        key="$host:$repo"
+        if in_list "$key" ${EXCLUDED[@]+"${EXCLUDED[@]}"}; then
+            excused_n=$((excused_n + 1))
+            [[ $DRY_RUN -eq 1 ]] && echo "  excused  $key"
+            continue
+        fi
+        findings+=("$host:$line")
+    done <<<"$out"
+}
+
+# This host — repos here carry Entire refs too, and on the authoring VM they are
+# the MOST likely to. Probed locally: `ssh <self>` does not work from the box
+# itself, so without this the reporting host lands in `unreachable` and its own
+# repos are never inspected. It was written when this only ran on the mini,
+# which is not in the exe.dev inventory and so was never double-visited.
+SELF=$(hostname -s)
+out=$(bash -c "$PROBE" 2>/dev/null); checked=$((checked + 1))
+[[ -n "$out" ]] && record "$SELF" "$out"
+
+# Tailnet hosts: WireGuard, not exe.dev's edge — parallel is fine, but keep it
+# simple and serial here; the fleet is small and this runs daily.
+for h in ${TAILNET[@]+"${TAILNET[@]}"}; do
+    [[ "$h" == "$SELF" ]] && continue   # already probed locally, above
+    out=$(ssh -o ConnectTimeout=15 -o BatchMode=yes "$h" "$PROBE" 2>/dev/null)
+    if [[ $? -ne 0 && -z "$out" ]]; then unreachable+=("$h"); continue; fi
+    checked=$((checked + 1))
+    [[ -n "$out" ]] && record "$h" "$out"
+done
+
+# exe.dev VMs that are NOT tailnet peers — reachable only via *.exe.xyz.
+# Strictly serial with a pause: this is the rate-limited path.
+first=1
+for h in ${EXEVMS[@]+"${EXEVMS[@]}"}; do
+    [[ "$h" == "$SELF" ]] && continue   # already probed locally
+    in_list "$h" ${TAILNET[@]+"${TAILNET[@]}"} && continue
+    [[ $first -eq 1 ]] || sleep 20
+    first=0
+    out=$(ssh -o ConnectTimeout=30 -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$h.exe.xyz" "$PROBE" 2>/dev/null)
+    if [[ $? -ne 0 && -z "$out" ]]; then unreachable+=("$h"); continue; fi
+    checked=$((checked + 1))
+    [[ -n "$out" ]] && record "$h" "$out"
+done
+
+for u in ${unreachable[@]+"${unreachable[@]}"}; do
+    echo "  note: $u unreachable — not inspected"
+done
+
+if [[ ${#findings[@]} -gt 0 ]]; then
+    for f in "${findings[@]}"; do echo "  UNPUSHED $f"; done
+    fail "${#findings[@]} unpushed Entire checkpoint ref(s): ${findings[*]} — push the repo so the record leaves the host"
+fi
+
+echo "OK: ${checked} host(s) inspected, 0 unpushed Entire checkpoints, ${excused_n} excused, ${#unreachable[@]} unreachable"
