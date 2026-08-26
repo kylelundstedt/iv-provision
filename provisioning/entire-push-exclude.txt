@@ -15,8 +15,22 @@
 # One "host:repo-path-relative-to-home" per line, e.g.
 #   iv-foundry-stage2:worktrees/fannie-sflpd-preauth-20260727
 #
-# Currently empty. One known candidate is outstanding and deliberately NOT
-# excused pending a decision: iv-foundry-stage2's
-# worktrees/fannie-sflpd-preauth-20260727, a dated pre-auth snapshot whose main
-# is an unrelated history ("Initial commit"). Either delete the clone or excuse
-# it here — see agent_docs/vm-disposability.md.
+# One known candidate is outstanding and deliberately NOT excused pending a
+# decision: iv-foundry-stage2's worktrees/fannie-sflpd-preauth-20260727, a dated
+# pre-auth snapshot whose main is an unrelated history ("Initial commit"). Either
+# delete the clone or excuse it here — see agent_docs/vm-disposability.md in
+# dotfiles.
+
+# Entire's bootstrap ref, not a record: entire/checkpoints/v1 here is a single
+# commit, "Initialize metadata ref" (ee0443d, 2026-08-17), carrying no transcript.
+# The work itself is safe — the worktree is clean and its branch
+# (fix/exeslim-python-launcher) is fully on the remote at c467bd7.
+#
+# It cannot be pushed regardless: iv-foundry-stage2's integration for
+# entire-agent-shelley is READ-ONLY, so `git push` returns 403 ("integration is
+# read-only"). Excused rather than fixed, so note the standing risk — a REAL
+# checkpoint landing in this worktree later would hit the same 403 and be
+# silently excused by this entry. If agent work resumes here, either grant the
+# integration write access or relay via iv-entire-agent-shelley, which does have
+# push rights (verified 2026-08-26), and drop this line.
+iv-foundry-stage2:worktrees/entire-agent-shelley-m4
