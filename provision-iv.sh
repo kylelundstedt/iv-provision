@@ -920,9 +920,39 @@ install_agentsview
 install_shelley
 install_apex
 
+# The python3 tools among these are installed to /usr/local/bin -- on every
+# PATH, including root's and systemd's -- but ship `#!/usr/bin/env python3`,
+# which resolves against the CALLER's PATH. The only interpreter on these VMs is
+# ~/.local/bin/python3 (uv-managed; the minimal base has no system python), so a
+# system-PATH tool depended on a user-PATH interpreter.
+#
+# That gap is not theoretical. `ssh vm 'provision-docsite ~/repo'` failed with
+#
+#     /usr/bin/env: 'python3': No such file or directory
+#
+# on a fully-provisioned VM, because a non-interactive shell never reaches the
+# PATH export in Ubuntu's skel .bashrc (fixed in exeslim; older images keep the
+# bug until recreated). The same gap applies to any system-context caller --
+# systemd units, cron, `sudo` with secure_path -- none of which have
+# ~/.local/bin regardless of that fix.
+#
+# So bake the absolute interpreter in at install time. The repo keeps the
+# portable `env` shebang for editing and for running from a checkout; the
+# INSTALLED copy is pinned to the interpreter provisioning just guaranteed. This
+# matches how entire-agent-shelley's launcher already resolves python (see
+# install_python), rather than inventing a second convention.
 echo "== doc-site and cloud helpers =="
+py="$HOME/.local/bin/python3"
+[[ -x $py ]] || { echo "provision: no interpreter at $py" >&2; exit 1; }
 for tool in render-site render-md-site provision-docsite gen-llms-txt shot install-cloud-cli; do
-  sudo install -m 0755 "$IV_REPO/bin/$tool" "/usr/local/bin/$tool"
+  src="$IV_REPO/bin/$tool"
+  if [[ $(head -c 2 "$src") == '#!' ]] && head -1 "$src" | grep -q 'env python3$'; then
+    tmp="$TMP/$tool"
+    { printf '#!%s\n' "$py"; tail -n +2 "$src"; } >"$tmp"
+    sudo install -m 0755 "$tmp" "/usr/local/bin/$tool"
+  else
+    sudo install -m 0755 "$src" "/usr/local/bin/$tool"
+  fi
 done
 sudo install -m 0755 "$IV_REPO/bin/agentsview-source-daemon" /usr/local/bin/agentsview-source-daemon
 

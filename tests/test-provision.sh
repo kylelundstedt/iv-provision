@@ -246,4 +246,33 @@ if ( . "$quarto_gate/fn.sh"; keeps_quarto ); then :; else
 grep -q 'if keeps_quarto; then' "$script" || {
   echo "remove_legacy_quarto no longer guards on keeps_quarto" >&2; exit 1; }
 
+# The doc-site python tools are installed to /usr/local/bin but their shebang
+# resolves against the CALLER's PATH, and the only interpreter on these VMs is
+# ~/.local/bin/python3. `ssh vm 'provision-docsite ~/repo'` therefore died with
+# "/usr/bin/env: 'python3': No such file or directory" on a fully-provisioned
+# box. Provisioning now rewrites the shebang to the absolute interpreter at
+# install time; check the rewrite exists, and that the repo copies still carry
+# the portable form (they must stay runnable from a checkout).
+grep -q "printf '#!%s\\\\n' \"\$py\"" "$script" || {
+  echo "provision no longer pins the interpreter for installed python tools" >&2
+  exit 1; }
+
+for tool in render-md-site gen-llms-txt shot; do
+  head -1 "$repo/bin/$tool" | grep -qx '#!/usr/bin/env python3' || {
+    echo "bin/$tool lost its portable env shebang" >&2; exit 1; }
+done
+
+# Exercise the rewrite itself: same transformation the install loop applies.
+shebang_dir=$(mktemp -d)
+trap 'rm -rf "$quarto_gate" "$shebang_dir"' EXIT
+{ printf '#!%s\n' "/opt/py/bin/python3"; tail -n +2 "$repo/bin/render-md-site"; } \
+  >"$shebang_dir/render-md-site"
+head -1 "$shebang_dir/render-md-site" | grep -qx '#!/opt/py/bin/python3' || {
+  echo "shebang rewrite did not produce an absolute interpreter" >&2; exit 1; }
+# The body must survive intact -- an off-by-one in tail would silently eat code.
+if ! diff -q <(tail -n +2 "$repo/bin/render-md-site") \
+             <(tail -n +2 "$shebang_dir/render-md-site") >/dev/null; then
+  echo "shebang rewrite altered the script body" >&2; exit 1
+fi
+
 printf '%s\n' 'provision script tests passed'
