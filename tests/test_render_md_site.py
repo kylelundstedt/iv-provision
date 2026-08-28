@@ -41,7 +41,6 @@ class RenderMarkdownSiteTests(unittest.TestCase):
         self.assertIn("<strong>WAP : table writes :: AVE : executions</strong>", html)
         self.assertIn('<div id="home-recent">', html)
 
-
     def test_links_resolve_against_what_the_render_produces(self):
         """A .md -> .html rewrite is only correct if the target is a page.
 
