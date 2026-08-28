@@ -17,11 +17,12 @@ from __future__ import annotations
 import argparse
 import functools
 import html
+import posixpath
 import re
 import shutil
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 # Excluded everywhere unless --no-default-excludes. These are agent and
 # repo-hygiene files that are never site content; every _quarto.yml on the
@@ -287,23 +288,74 @@ def escape_mermaid(out: str) -> str:
     )
 
 
-def rewrite_links(body: str, depth: int) -> str:
+def rewrite_links(
+    body: str,
+    href: str,
+    root: Path,
+    rendered: set[str],
+    assets: set[str],
+    dead: list[tuple[str, str]],
+) -> str:
     """`href="x.md"` -> `href="x.html"`, leaving absolute and external URLs alone.
 
-    This is the whole reason the output tree mirrors the source tree: relative
-    links keep resolving without a link database or a base-url rewrite pass.
+    The output tree mirrors the source tree, so relative links keep resolving
+    without a link database or a base-url rewrite pass. What the mirror alone
+    cannot do is tell a link to a rendered page from a link to a page this site
+    excludes: `.md` -> `.html` is a pure string edit, and under Quarto the same
+    edit silently produced 404s whenever the target was excluded from
+    `project.render`. iv-docs shipped 14 such links (decisions/ -> spikes/,
+    agent_docs/) because both ends existed in the repo and neither Quarto nor a
+    reader's eye caught the gap.
+
+    So resolve every relative link against what this render actually produces:
+
+    - target is a rendered page          -> rewrite to .html
+    - target is a repo file, not a page  -> copy it into the site as an asset
+    - anything else                      -> unlink it, keep the text, report it
+
+    Unlinking rather than leaving a dead href is the honest failure: an excluded
+    page is deliberately not published, and a reader is better served by plain
+    text than by a link that 404s. `dead` collects (page, target) for the
+    caller's summary, so the operator sees what the exclusions cost.
     """
+    page_dir = PurePosixPath(href).parent
 
     def sub(m: re.Match) -> str:
         url = m.group(1)
-        if re.match(r"^(https?:|mailto:|#|/)", url):
+        if re.match(r"^(https?:|mailto:|#|/|[a-z][a-z0-9+.-]*:)", url):
             return m.group(0)
         target, _, frag = url.partition("#")
-        if target.endswith((".md", ".qmd")):
-            target = target.rsplit(".", 1)[0] + ".html"
-        return f'href="{target}{"#" + frag if frag else ""}"'
+        if not target:  # bare "#anchor", already handled above
+            return m.group(0)
+        suffix = "#" + frag if frag else ""
 
-    return re.sub(r'href="([^"]+)"', sub, body)
+        # Resolve to a repo-relative posix path, the key both `rendered` and the
+        # source tree are addressed by. os.path.normpath collapses ".." without
+        # touching the filesystem, so links that escape the repo stay detectable.
+        resolved = posixpath.normpath((page_dir / target).as_posix()).lstrip("./")
+        if resolved.startswith(".."):
+            dead.append((href, url))
+            return "href=\x00"
+
+        if resolved.endswith((".md", ".qmd")):
+            as_html = resolved.rsplit(".", 1)[0] + ".html"
+            if as_html in rendered:
+                return f'href="{target.rsplit(".", 1)[0]}.html{suffix}"'
+            dead.append((href, url))
+            return "href=\x00"
+
+        # Not a page: a linked repo file (a schema, a spec, an image). Publish
+        # it verbatim at the mirrored path so the link keeps working.
+        src = root / resolved
+        if src.is_file():
+            assets.add(resolved)
+            return m.group(0)
+        dead.append((href, url))
+        return "href=\x00"
+
+    body = re.sub(r'href="([^"]+)"', sub, body)
+    # Drop the <a> wrapper around every link marked dead above, keeping its text.
+    return re.sub(r"<a\s+href=\x00[^>]*>(.*?)</a>", r"\1", body, flags=re.S)
 
 
 def extract_toc(body: str) -> tuple[str, str]:
@@ -435,11 +487,15 @@ def main() -> int:
     if out_root.exists():
         shutil.rmtree(out_root)
 
+    rendered = {href for _, href, _, _ in entries}
+    assets: set[str] = set()
+    dead: list[tuple[str, str]] = []
+
     for src, href, title, body_md in entries:
         depth = href.count("/")
         root_prefix = "../" * depth
         body = render_fragment(body_md)
-        body = rewrite_links(body, depth)
+        body = rewrite_links(body, href, root, rendered, assets, dead)
         body, toc = extract_toc(body)
         page = PAGE.format(
             title=html.escape(
@@ -475,7 +531,24 @@ def main() -> int:
             encoding="utf-8",
         )
 
+    # Files linked from a page but not themselves pages: schemas, specs, images.
+    for rel in sorted(assets):
+        dest = out_root / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(root / rel, dest)
+
     print(f"rendered {len(entries)} page(s): {out_root}")
+    if assets:
+        print(f"copied {len(assets)} linked asset(s)")
+    if dead:
+        # Not an error: excluding a page is a choice, and the link is now plain
+        # text rather than a 404. But it is exactly the drift worth seeing, so
+        # it is reported per render instead of waiting for a reader to find it.
+        print(f"unlinked {len(dead)} link(s) to unrendered targets:", file=sys.stderr)
+        for page, url in sorted(set(dead))[:20]:
+            print(f"  {page} -> {url}", file=sys.stderr)
+        if len(set(dead)) > 20:
+            print(f"  ... and {len(set(dead)) - 20} more", file=sys.stderr)
     return 0
 
 
