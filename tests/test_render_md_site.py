@@ -94,6 +94,44 @@ class RenderMarkdownSiteTests(unittest.TestCase):
         # The operator is told what the exclusions cost.
         self.assertIn("unlinked 2 link(s)", proc.stderr)
 
+    def test_links_escaping_the_repo_are_not_rewritten(self):
+        """`str.lstrip` takes a character set, not a prefix.
+
+        Regression: the escape check normalised with `.lstrip("./")`, which
+        turned "../decisions/x.md" into "decisions/x.md" -- eating the ".."
+        it existed to detect. iv-docs had exactly one such authoring typo
+        (spikes/ page linking "../../decisions/..." where "../" was meant) and
+        the renderer rewrote it to a confident 404 instead of reporting it.
+        """
+        repo_root = Path(__file__).resolve().parents[1]
+        renderer = repo_root / "bin" / "render-md-site"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "decisions").mkdir()
+            (root / "sub").mkdir()
+            (root / "decisions" / "d.md").write_text("# D\n", encoding="utf-8")
+            (root / "index.md").write_text("# Site\n", encoding="utf-8")
+            # One "../" reaches decisions/; two escapes the repo entirely.
+            (root / "sub" / "page.md").write_text(
+                "# Page\n\n- [ok](../decisions/d.md)\n- [escapes](../../decisions/d.md)\n",
+                encoding="utf-8",
+            )
+            proc = subprocess.run(
+                [str(renderer), str(root)],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=os.environ.copy(),
+            )
+            html = (root / "_site" / "sub" / "page.html").read_text(encoding="utf-8")
+
+        # The in-tree link still resolves.
+        self.assertIn('href="../decisions/d.html"', html)
+        # The escaping link is unlinked, not rewritten into a 404.
+        self.assertNotIn('href="../../decisions/d.html"', html)
+        self.assertIn("escapes", html)
+        self.assertIn("unlinked 1 link(s)", proc.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()
