@@ -197,10 +197,40 @@ class RenderMarkdownSiteTests(unittest.TestCase):
                 "Readme Title", (root / "_site" / "index.html").read_text("utf-8")
             )
 
-            # 3. --include means "render exactly these", so README stays put.
+            # 3. An --include that NAMES the README asks for it at its own path.
             proc = self._render(root, "--include", "README.md", "--include", "doc.md")
             self.assertNotIn("using README.md", proc.stdout)
             self.assertTrue((root / "_site" / "README.html").exists())
+
+    def test_glob_include_does_not_forfeit_the_landing_page(self):
+        """A glob that sweeps the README in is not a request to relocate it.
+
+        --include first suppressed promotion outright, on the reasoning that
+        "render exactly these" states complete intent. But callers reach for
+        --include to re-admit files the defaults drop -- fannie-sflpd-poc
+        re-including three nested READMEs that are real pages -- and that cost
+        them their landing page: `--include '**/*.md'`, a no-op restatement of
+        the default, turned the site root back into a redirect stub AND emitted
+        a duplicate README.html.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "sub").mkdir()
+            (root / "README.md").write_text("# Root Readme\n", encoding="utf-8")
+            (root / "sub" / "README.md").write_text("# Nested\n", encoding="utf-8")
+            (root / "sub" / "p.md").write_text("# P\n", encoding="utf-8")
+            proc = self._render(
+                root, "--include", "**/*.md", "--include", "sub/README.md"
+            )
+            site = root / "_site"
+            index = (site / "index.html").read_text(encoding="utf-8")
+            pages = sorted(p.relative_to(site).as_posix() for p in site.rglob("*.html"))
+
+        self.assertIn("using README.md as the landing page", proc.stdout)
+        self.assertIn("Root Readme", index)
+        self.assertNotIn('http-equiv="refresh"', index)
+        # Promoted once -- not also emitted at its own path.
+        self.assertEqual(pages, ["index.html", "sub/README.html", "sub/p.html"])
 
     def test_unpromoted_readme_links_are_not_redirected_to_index(self):
         """The README->index redirect must only apply when promotion happened.

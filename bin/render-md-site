@@ -235,18 +235,33 @@ def readme_as_index(
     - an authored index.md/index.qmd always beats the README;
     - an explicit `--exclude README.md` opts out entirely (a user exclude beats
       everything, which is the rule the rest of discover() already follows);
-    - `--include` means "render exactly these", so it suppresses the fallback --
-      and a README already in `sources` stays where the caller put it rather
-      than being moved to the root.
+    - a README the caller explicitly named in --include stays where they put it,
+      rather than being moved to the root under them.
+
+    `--include` does NOT otherwise suppress the promotion. It first did, on the
+    reasoning that "render exactly these" is a complete statement of intent --
+    but a caller reaches for --include to re-admit a file the defaults drop
+    (fannie-sflpd-poc re-including three nested READMEs that are real pages),
+    and having that silently cost them their landing page is a booby trap. The
+    two settings are independent: --include picks the page SET, this picks which
+    page is the ROOT. Conflating them made `--include '**/*.md'` -- a no-op
+    restatement of the default -- turn the site root back into a redirect stub.
     """
     if not ROOT_README_FALLBACK:
         return None
     if any(p.name in ("index.md", "index.qmd") for p in sources):
         return None
-    if matches("README.md", user_excludes) or includes:
+    if matches("README.md", user_excludes):
+        return None
+    # An include that NAMES the root README (rather than reaching it through a
+    # glob) is the caller asking for README.html at its own path. A glob like
+    # `**/*.md` is not that request -- it sweeps the README in incidentally, and
+    # treating that as intent is what produced both a stub index and a duplicate
+    # README.html on fannie-sflpd-poc.
+    if "README.md" in includes:
         return None
     readme = root / "README.md"
-    if not readme.is_file() or readme in sources:
+    if not readme.is_file():
         return None
     return readme
 
@@ -533,7 +548,10 @@ def main() -> int:
     # them alongside) and the site root is a real page rather than a redirect.
     readme_index = readme_as_index(root, sources, user_excludes, args.include)
     if readme_index is not None:
-        sources = [readme_index] + sources
+        # Drop any incidental copy (a glob include can have swept it in) before
+        # putting it back at the front as the index, or the same file renders
+        # twice: once as index.html and once as README.html.
+        sources = [readme_index] + [p for p in sources if p != readme_index]
         print("using README.md as the landing page (no index.md found)")
 
     # Pass 1: titles, so every page's sidebar can name every other page.
