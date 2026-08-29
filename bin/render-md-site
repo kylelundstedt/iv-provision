@@ -47,12 +47,23 @@ DEFAULT_EXCLUDES = [
     "CLAUDE.md",
     "TODO.md",
     "CHANGELOG.md",
-    # Quarto ignores README.md in a project by default, and every site here
-    # relies on that: README is repo-facing, index.md is site-facing. Rendering
-    # both produces two near-duplicate landing pages.
-    "README.md",
+    # Nested READMEs stay excluded: they are directory notes, not site pages,
+    # and rendering them alongside an index.md in the same directory produces
+    # two near-duplicate pages. The ROOT README.md is handled separately -- see
+    # ROOT_README_FALLBACK below -- because it is the one document a repo
+    # reliably has, and a site whose landing page is a redirect stub is worse
+    # than one whose landing page is the README.
     "**/README.md",
 ]
+
+# A repo with no index.md but with a README.md gets the README as its landing
+# page. Previously the root was a `<meta refresh>` stub pointing at whatever
+# sorted first -- for fannie-sflpd-poc that was control/schemas/, i.e. the site
+# opened on a schema reference. README is what the author already wrote to
+# introduce the repo, so use it, and say so in the render output rather than
+# doing it silently. An explicit index.md still wins; so does an explicit
+# --exclude README.md.
+ROOT_README_FALLBACK = True
 
 # Mermaid, as a named preset rather than a pasted <script>: gitlake's
 # _quarto.yml carried this verbatim under include-after-body, and copying such
@@ -210,6 +221,36 @@ def discover(
     return out
 
 
+def readme_as_index(
+    root: Path,
+    sources: list[Path],
+    user_excludes: list[str],
+    includes: list[str],
+) -> Path | None:
+    """Root README.md, when the repo has no index page of its own.
+
+    Returns the README to render AS index.html, or None to leave things alone.
+    Deliberately conservative, in the order a caller would expect to win:
+
+    - an authored index.md/index.qmd always beats the README;
+    - an explicit `--exclude README.md` opts out entirely (a user exclude beats
+      everything, which is the rule the rest of discover() already follows);
+    - `--include` means "render exactly these", so it suppresses the fallback --
+      and a README already in `sources` stays where the caller put it rather
+      than being moved to the root.
+    """
+    if not ROOT_README_FALLBACK:
+        return None
+    if any(p.name in ("index.md", "index.qmd") for p in sources):
+        return None
+    if matches("README.md", user_excludes) or includes:
+        return None
+    readme = root / "README.md"
+    if not readme.is_file() or readme in sources:
+        return None
+    return readme
+
+
 def first_h1(text: str) -> str | None:
     """Return the first H1 outside fenced code blocks."""
     in_fence = False
@@ -295,6 +336,7 @@ def rewrite_links(
     rendered: set[str],
     assets: set[str],
     dead: list[tuple[str, str]],
+    readme_is_index: bool = False,
 ) -> str:
     """`href="x.md"` -> `href="x.html"`, leaving absolute and external URLs alone.
 
@@ -344,6 +386,19 @@ def rewrite_links(
 
         if resolved.endswith((".md", ".qmd")):
             as_html = resolved.rsplit(".", 1)[0] + ".html"
+            # When the root README was promoted to index.html, links to it --
+            # which every repo has, from nested docs pointing home -- follow it
+            # there instead of 404ing on a README.html that was never emitted.
+            #
+            # Gated on the promotion actually having happened. Without that
+            # guard this fired for any unrendered README, so ave-adapters (which
+            # HAS an index.qmd, leaving its README excluded as repo hygiene)
+            # turned a correctly-unlinked reference into a link back to the
+            # index -- a page linking to itself.
+            if readme_is_index and as_html == "README.html":
+                as_html = "index.html"
+                target = posixpath.relpath("index.html", page_dir.as_posix())
+                return f'href="{target}{suffix}"'
             if as_html in rendered:
                 return f'href="{target.rsplit(".", 1)[0]}.html{suffix}"'
             dead.append((href, url))
@@ -473,10 +528,20 @@ def main() -> int:
     )
     head_extra = Path(args.head).read_text() if args.head else ""
 
+    # Root README.md as the landing page when nothing else claims it. Rendered
+    # AS index.html, so links to "README.md" still resolve (the rewrite maps
+    # them alongside) and the site root is a real page rather than a redirect.
+    readme_index = readme_as_index(root, sources, user_excludes, args.include)
+    if readme_index is not None:
+        sources = [readme_index] + sources
+        print("using README.md as the landing page (no index.md found)")
+
     # Pass 1: titles, so every page's sidebar can name every other page.
     entries = []
     for src in sources:
         rel = src.relative_to(root)
+        if src == readme_index:
+            rel = Path("index.md")
         text = src.read_text(encoding="utf-8", errors="replace")
         body_md, fm_title = strip_frontmatter(text)
         authored_h1 = first_h1(body_md)
@@ -500,7 +565,9 @@ def main() -> int:
         depth = href.count("/")
         root_prefix = "../" * depth
         body = render_fragment(body_md)
-        body = rewrite_links(body, href, root, rendered, assets, dead)
+        body = rewrite_links(
+            body, href, root, rendered, assets, dead, readme_index is not None
+        )
         body, toc = extract_toc(body)
         page = PAGE.format(
             title=html.escape(

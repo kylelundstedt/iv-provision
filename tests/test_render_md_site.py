@@ -132,6 +132,116 @@ class RenderMarkdownSiteTests(unittest.TestCase):
         self.assertIn("escapes", html)
         self.assertIn("unlinked 1 link(s)", proc.stderr)
 
+    def _render(self, root, *args):
+        renderer = Path(__file__).resolve().parents[1] / "bin" / "render-md-site"
+        return subprocess.run(
+            [str(renderer), str(root), *args],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=os.environ.copy(),
+        )
+
+    def test_root_readme_becomes_the_landing_page(self):
+        """A repo with a README and no index.md should open on the README.
+
+        Before this, the site root was a <meta refresh> stub pointing at
+        whatever sorted first -- for fannie-sflpd-poc that was
+        control/schemas/, so the site opened on a schema reference. Links to
+        README.md must follow it to index.html, since that is what nested docs
+        use to point home.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "spec").mkdir()
+            (root / "README.md").write_text(
+                "# My Project\n\nIntro prose.\n", encoding="utf-8"
+            )
+            (root / "spec" / "thing.md").write_text(
+                "# Thing\n\nHome: [readme](../README.md)\n", encoding="utf-8"
+            )
+            proc = self._render(root)
+            index = (root / "_site" / "index.html").read_text(encoding="utf-8")
+            thing = (root / "_site" / "spec" / "thing.html").read_text(encoding="utf-8")
+            has_readme_html = (root / "_site" / "README.html").exists()
+
+        self.assertIn("using README.md as the landing page", proc.stdout)
+        # Real content, not a redirect stub.
+        self.assertIn("Intro prose", index)
+        self.assertNotIn('http-equiv="refresh"', index)
+        # One landing page, not two near-duplicates.
+        self.assertFalse(has_readme_html)
+        # A link to README.md follows it to index.html.
+        self.assertIn('href="../index.html"', thing)
+
+    def test_readme_fallback_yields_to_explicit_intent(self):
+        """index.md wins; --exclude opts out; --include means exactly these."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "README.md").write_text("# Readme Title\n", encoding="utf-8")
+            (root / "doc.md").write_text("# Doc\n", encoding="utf-8")
+
+            # 1. An authored index.md beats the README.
+            (root / "index.md").write_text("# Index Title\n", encoding="utf-8")
+            proc = self._render(root)
+            self.assertNotIn("using README.md", proc.stdout)
+            self.assertIn(
+                "Index Title", (root / "_site" / "index.html").read_text("utf-8")
+            )
+            (root / "index.md").unlink()
+
+            # 2. An explicit --exclude opts out entirely.
+            proc = self._render(root, "--exclude", "README.md")
+            self.assertNotIn("using README.md", proc.stdout)
+            self.assertNotIn(
+                "Readme Title", (root / "_site" / "index.html").read_text("utf-8")
+            )
+
+            # 3. --include means "render exactly these", so README stays put.
+            proc = self._render(root, "--include", "README.md", "--include", "doc.md")
+            self.assertNotIn("using README.md", proc.stdout)
+            self.assertTrue((root / "_site" / "README.html").exists())
+
+    def test_unpromoted_readme_links_are_not_redirected_to_index(self):
+        """The README->index redirect must only apply when promotion happened.
+
+        Regression: the redirect was gated on "README.html was not rendered",
+        which is also true when a repo HAS an index.qmd and its README stays
+        excluded as repo hygiene. ave-adapters is exactly that shape, and its
+        index page's link to README.md became a link to itself.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "README.md").write_text("# Guide\n", encoding="utf-8")
+            (root / "index.md").write_text(
+                "# Site\n\n- [guide](README.md)\n", encoding="utf-8"
+            )
+            self._render(root)
+            index = (root / "_site" / "index.html").read_text(encoding="utf-8")
+        # Compare the <main> body only: the sidebar legitimately links to
+        # index.html on every page, including this one.
+        body = index.split("<main>")[1].split("</main>")[0]
+
+        # The README was never rendered, so the link is dropped -- not pointed
+        # at index.html, which is the page doing the linking.
+        self.assertNotIn("href=", body)
+        self.assertIn("guide", body)
+
+    def test_nested_readmes_stay_out_of_the_site(self):
+        """Only the ROOT README is promoted; sub/README.md is a directory note."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "sub").mkdir()
+            (root / "README.md").write_text("# Root\n", encoding="utf-8")
+            (root / "sub" / "README.md").write_text("# Nested\n", encoding="utf-8")
+            (root / "sub" / "p.md").write_text("# P\n", encoding="utf-8")
+            self._render(root)
+            pages = sorted(
+                p.relative_to(root / "_site").as_posix()
+                for p in (root / "_site").rglob("*.html")
+            )
+        self.assertEqual(pages, ["index.html", "sub/p.html"])
+
 
 if __name__ == "__main__":
     unittest.main()
