@@ -332,8 +332,13 @@ def rewrite_links(
         # Resolve to a repo-relative posix path, the key both `rendered` and the
         # source tree are addressed by. os.path.normpath collapses ".." without
         # touching the filesystem, so links that escape the repo stay detectable.
-        resolved = posixpath.normpath((page_dir / target).as_posix()).lstrip("./")
-        if resolved.startswith(".."):
+        # normpath already collapses "./" and "..", and returns "." for the
+        # root. No lstrip here: str.lstrip takes a SET OF CHARACTERS, not a
+        # prefix, so lstrip("./") turned "../decisions/x.md" into
+        # "decisions/x.md" -- silently eating the ".." this check exists to
+        # catch, and rewriting an out-of-tree link into a confident 404.
+        resolved = posixpath.normpath((page_dir / target).as_posix())
+        if resolved == "." or resolved.startswith(".."):
             dead.append((href, url))
             return "href=\x00"
 
