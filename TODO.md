@@ -169,17 +169,33 @@ What remains:
       unpatched packages. What it misses is *newly added* packages (e.g.
       `nginx-light`, `openssh-client`) and image-level changes to the boot path.
 
-      Fleet state 2026-08-20 -- the pre-exeslim `exeuntu` base is fully retired:
+      Fleet state 2026-08-29 -- the pre-exeslim `exeuntu` base is fully retired:
 
-      | Base | VMs |
-      | ---- | --- |
-      | `exeslim-dev` `2026-08-18.11.1` | `iv-provision`, `kgl-songs`, `telnyx-vm`, `kgl-thoughts` (all migrated) |
-      | `exeslim-dev` `2026-07-29.6.1` | `iv-docs`, `iv-ave-adapters`, `iv-gitlake`, `iv-gitlake-examples`, `iv-home`, `iv-foundry-stage2` |
+      | Base | Shell | VMs |
+      | ---- | ----- | --- |
+      | `exeslim-dev` `2026-08-19.13.1` | bash | `iv-cli`, `fannie-sflpd-poc` |
+      | `exeslim-dev` `2026-08-18.11.1` | bash | `iv-provision`, `kgl-songs`, `telnyx-vm`, `kgl-thoughts` |
+      | `exeslim-dev` `2026-07-29.6.1` | zsh | `iv-docs`, `iv-ave-adapters`, `iv-gitlake`, `iv-gitlake-examples`, `iv-home`, `iv-entire-agent-shelley`, `iv-foundry-stage2` |
 
       Done 2026-08-19/20: `kgl-apex` dropped (only ever used to open a PR);
       `kgl-songs`, `telnyx-vm`, and `kgl-thoughts` recreated onto `exeslim-dev`.
-      **No exeuntu-base VMs remain.** The six `exeslim-dev 2026-07-29.6.1` VMs
-      are only one image behind and low-risk; recreate opportunistically.
+      **No exeuntu-base VMs remain.**
+
+      **Every VM above predates the `.bashrc` PATH fix** (exeslim#6, first in
+      `2026-08-28.24.1`). On the bash-shell rows the `~/.local/bin` export is
+      below skel's non-interactive guard, so `ssh <vm> '<cmd>'` gets no user
+      PATH -- `provision-docsite` failed exactly that way on `iv-cli` and
+      `fannie-sflpd-poc` (2026-08-29). The zsh rows are accidentally immune
+      (`.zshenv` is read on every invocation), which is why the bug survived so
+      long. `iv-cli`, `kgl-songs` and `fannie-sflpd-poc` carry a hand-applied
+      fix (backup at `~/.bashrc.pre-pathfix`); it survives re-provisioning but
+      NOT recreation. Recreating onto `2026-08-28.24.1`+ is the durable fix and
+      makes the hand patches unnecessary.
+
+      3.0.20 also pins the interpreter of the installed doc-site tools, so those
+      no longer depend on the user PATH at all -- the two fixes are independent
+      and both wanted (systemd, cron and `sudo` secure_path have no
+      `~/.local/bin` regardless of the image).
 
 ### Base recreate playbook (from the kgl-songs / telnyx-vm / kgl-thoughts migrations)
 
