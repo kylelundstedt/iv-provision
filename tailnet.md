@@ -41,6 +41,47 @@ node — the decision is the attachment, made off-VM, rather than a command type
 the box. Nothing is baked in, nothing runs on boot, and the credential stays at
 the edge.
 
+## The vendor's `tailscale` skill, and what it does not know
+
+Since 2026-09-02 the fleet also carries Tailscale's own agent skill
+(`tailscale/tailscale-skill`, vendored as a team row like every other). It is
+reference material for Tailscale *the product*: policy-file syntax, `tagOwners`,
+OAuth client scopes, `tailscale status`/`netcheck` diagnostics, the API. That is
+exactly the material whose absence cost most of a debugging cycle on 2026-08-23,
+when a `tag:dev` mint failed with `requested tags [tag:dev] are invalid or not
+permitted` and two people re-verified the OAuth scope twice before the answer
+turned out to be tag *ownership* -- `tagOwners` must list a tag as an owner of
+itself.
+
+It would have helped, though not by itself. `enterprise.md` frames OAuth scopes
+the right way ("the client can only operate on tags it owns"), which is the turn
+the debugging never made, and routes to
+`tailscale.com/docs/features/oauth-clients` -- which does carry the worked
+tag-owns-tag example. The skill's own `access-control.md` shows only the ordinary
+`tag -> group` form, so an agent has to follow the link. That is the skill's
+design (thin inline, canonical URL, fetch on demand) and it means **the skill is
+only as good as the VM's ability to fetch tailscale.com** -- worth knowing before
+trusting it in a network-broken state, which is precisely when tailnet questions
+get asked.
+
+**It is upstream's model of Tailscale, not this fleet's.** It knows nothing about
+`api-tailscale`, the edge-injected credential, or the join path in
+`provision-iv.sh`, and its generic advice -- `tailscale up --auth-key=tskey-...`
+from a key pasted out of the admin console -- is the thing this document exists to
+prevent. No credential is ever meant to reach a VM.
+
+So the boundary is:
+
+| Question | Authority |
+| --- | --- |
+| What does this policy-file stanza mean? Why did Tailscale reject this key/tag? What is `netcheck` telling me? | the `tailscale` skill |
+| How does *this fleet's* VM get onto the tailnet, and who decided it may? | this document, `join-tailnet`, `provision-iv.sh` |
+
+The two are kept adjacent rather than merged, deliberately. Folding fleet
+specifics into a vendored skill would be overwritten by the next re-vendor
+(`vendor-skills.sh` `rm -rf`s `skills/`), and folding vendor reference into
+`join-tailnet` would be a copy that silently ages.
+
 ## Joining a VM by hand (the `join-tailnet` skill)
 
 Provisioning joins automatically. This skill remains for the cases it cannot

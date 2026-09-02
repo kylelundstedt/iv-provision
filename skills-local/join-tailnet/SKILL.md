@@ -98,6 +98,25 @@ misread from a screenshot.)
   it first — the `exeslim-dev` base does not carry it, and neither did stock
   exeuntu in a started state.
 
+## Relationship to the vendored `tailscale` skill
+
+The fleet also carries Tailscale's own skill (`tailscale`, vendored from
+`tailscale/tailscale-skill`). Use it for questions about Tailscale itself --
+policy-file syntax, `tagOwners`, OAuth scopes, `tailscale status`/`netcheck`
+output, the API. It is genuinely better at those than this file.
+
+**Do not take its join advice.** It teaches the standard path, `tailscale up
+--auth-key=<key from the admin console>`, which is wrong here: on this fleet no
+Tailscale credential ever reaches a VM, and the key is minted through the
+`api-tailscale` proxy as above. If that skill is loaded and suggests pasting a
+key, this file wins.
+
+The division is useful in one specific direction: when the mint above *fails*,
+the error is usually Tailscale's rather than exe.dev's -- `requested tags
+[tag:dev] are invalid or not permitted` is tag ownership, not scope -- and the
+`tailscale` skill has the reference material to decode it. Read what the API
+actually said before reaching for either.
+
 ## SSH discipline
 
 - **One SSH attempt at a time.** Never launch parallel SSH to `*.exe.xyz`.
