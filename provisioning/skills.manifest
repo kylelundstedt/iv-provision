@@ -30,6 +30,21 @@ team npx marimo-team/skills -s marimo-notebook marimo-batch
 # panes, run without stealing focus, start helper agents). No-ops unless
 # HERDR_ENV=1. Team: agents run in herdr on VMs too (iv-image re-vendors it).
 team npx ogulcancelik/herdr -s herdr
+# tailscale: Tailscale's own skill (alpha, tailscale/tailscale-skill). Team,
+# because the fleet's tailnet is a provisioning concern, not a personal one:
+# every VM joins in provision-iv.sh, and the failures are policy-file and
+# auth-key shaped -- tagOwners, OAuth scopes, `tag:dev` vs the exe.dev `tailnet`
+# tag. Those cost most of a debugging cycle on 2026-08-23 (see
+# exeslim/iv-tailnet-join.sh) because the answer lived in Tailscale's docs and
+# nothing on the VM carried them.
+#
+# NOTE it is the vendor's own skill, so what it teaches is upstream's model, NOT
+# this fleet's. It does not know about `api-tailscale`, the edge-injected
+# credential, or the join path in provision-iv.sh -- tailnet.md and the
+# join-tailnet skill remain the authority on those, and this skill's generic
+# `tailscale up --auth-key=` advice is wrong here. Kept adjacent rather than
+# merged for exactly that reason.
+team npx tailscale/tailscale-skill
 # archil-guide has no GitHub repo — fetched directly
 team curl archil-guide https://archil.com/skill.md
 
