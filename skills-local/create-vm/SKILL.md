@@ -20,21 +20,47 @@ the whole point: do not answer such a request with "run this on your Mac".
 
 `api-exe-new` is an http-proxy integration attached to **this VM only**. exe.dev
 injects a bearer token at its edge; the token never touches this VM and cannot be
-read from it. It is scoped `--cmds=new`, enforced server-side.
+read from it. The scope is enforced server-side, so probing it is cheap and safe.
 
-Verified 2026-08-22 from `iv-provision`: `rm`, `ssh-key list`,
-`integrations list`, `share set-public` and even `whoami` all return
-**403 `command not allowed by token permissions`**. Only `new` returns 200.
+Re-verified 2026-09-02 from `iv-provision`. **Four commands return 200:**
+
+| Command | Gives you |
+| --- | --- |
+| `new` | VM creation -- the point of the integration |
+| `ls` | full JSON inventory of every VM on the account |
+| `whoami` | owner email and the account's SSH keys |
+| `integrations list` | every integration, with config and attachments |
+
+Everything else is **403 `command not allowed by token permissions`**: `rm`,
+`restart`, `resize`, `tag`, `cp`, `rename`, `comment`, `share`, `domain`, `stat`,
+`shelley`, `team`, `billing`, `pool`, `ssh-key list`, `integrations add` -- and
+even `help`.
+
+> Earlier revisions of this skill said `ls`, `whoami` and `integrations list` were
+> 403 (measured 2026-08-22, when the scope really was `--cmds=new`). The token has
+> since been widened. Do not skip those calls on the strength of the old note.
+
+The permission check fires **before** help rendering, which makes `--help` a free
+scope oracle: `integrations list --help` returns the flag spec, while
+`integrations add --help` returns 403. Use it to re-derive this table rather than
+trusting the table's date.
 
 Consequences to design around, not fight:
 
-- **You cannot check whether a name is taken** (`ls` is 403). Just submit; exe.dev
-  rejects duplicates itself. Report its error verbatim rather than guessing.
-- **You cannot attach integrations or tag afterwards.** Everything the VM will
-  ever need must be on the `new` line -- exe.dev fixes image, tags and
-  integrations at creation.
+- **You can check whether a name is taken.** `ls` works, so read the inventory
+  before creating. exe.dev also rejects duplicates itself -- report its error
+  verbatim rather than guessing.
+- **You cannot attach integrations or tag afterwards.** `integrations list` is
+  readable but `integrations add`/`attach` are not. Everything the VM will ever
+  need must be on the `new` line -- exe.dev fixes image, tags and integrations at
+  creation.
 - **You cannot delete a VM.** A typo'd name is the user's to clean up in the
   lobby. So confirm the name back before creating.
+
+Widening the scope is a lobby operation the token cannot perform on its own
+(`ssh-key generate-api-key` is 403 here, by design). Granting `integrations add`
+in particular is not a small step: anything that can add an integration can
+attach an arbitrary credential to `auto:all`.
 
 ## The call
 
