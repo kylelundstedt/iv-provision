@@ -15,7 +15,7 @@ SHELLEY_VERSION=0.959.914757635
 SHELLEY_TAG=v0.959.914757635
 SHELLEY_COMMIT=33df9d893b0de54d32942c7541841cb0e626baa2
 APEX_VERSION=1.1.16
-# Entire (ACR provider, ADR 0010) and IV's Shelley external-agent plugin.
+# Entire (ACR provider, ADR 0014) and IV's Shelley external-agent plugin.
 # Pinned deliberately, NOT floating: entire-agent-shelley 0.1.3 speaks a fixed
 # plugin<->CLI protocol (the `info` hook-name set and lifecycle JSON), so the
 # CLI version is only bumped after the plugin is re-qualified against it on the
@@ -66,7 +66,7 @@ ENTIRE_SHA256_ARM64=e512b66d238d3cfb858f66c6a362f210d120ac7151c7c0c2f6d3d9e7345b
 # Matches SHA256SUMS at tag v0.1.3 and the hash recorded in its README.
 ENTIRE_PLUGIN_SHA256=1541c304ce86e7b80b74d91a01348daa6a38dd53e068c856c3d832880a55f64e
 # Vendored AgentsView adapter (see vendor/entire-agent-agentsview/README.md).
-ENTIRE_AGENTSVIEW_SHA256=801065264f065068f5e8da8e58af61669c24ee10a6b4dff2a2e411660f4de84e
+ENTIRE_AGENTSVIEW_SHA256=c75d5459537d208b0ad674f97cd8a1814376f23b2a23a52d3e6fd97c634529a7
 # claude: from the release's SHASUMS256.txt. codex: computed at pin time (the
 # release publishes .sigstore attestations, not a plain checksum file).
 # uv: from the asset's own .sha256 file.
@@ -702,7 +702,7 @@ install_tailscale() {
   unset ts_key
 }
 
-# Entire CLI: the ACR provider adopted by ADR 0010. Absent from this script until
+# Entire CLI: the ACR provider retained by ADR 0014. Absent from this script until
 # 2026-08-18, which meant the *primary* authoring-context capture path was
 # hand-installed and silently did not survive a VM recreate -- the one gap here
 # that loses provenance rather than convenience.
@@ -713,7 +713,7 @@ install_tailscale() {
 #
 # No credential is involved: capture works unauthenticated with the git-branch
 # checkpoint backend (`entire auth status` reports "Not logged in" on VMs that are
-# actively capturing). Telemetry stays off, per ADR 0010.
+# actively capturing). Telemetry stays off, per ADR 0014.
 install_entire() {
   local actual
   actual=$(entire_version)
@@ -772,9 +772,11 @@ install_entire_plugin() {
   [[ $(sha256sum "$dest" | awk '{print $1}') == "$ENTIRE_PLUGIN_SHA256" ]]
 }
 
-# entire-agent-agentsview: the attach-only Entire adapter over AgentsView's
-# normalized archive -- ADR 0010's backfill/reconciliation path across agents,
-# and the only one that can attach Claude Code or Codex sessions.
+# entire-agent-agentsview: the attach-only bridge from AgentsView's normalized
+# fleet-observability archive into Entire repository provenance. It can attach
+# historical or otherwise uncaptured sessions across agents after review; it is
+# not automatic live capture or independent protection against loss of a native
+# agent store.
 #
 # Vendored (vendor/entire-agent-agentsview/) rather than symlinked. It was on
 # PATH pointing into a *spike worktree*

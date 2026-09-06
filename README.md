@@ -54,7 +54,7 @@ baked into this repository or copied between VMs.
 
 Provisioning installs the **Entire CLI** (pinned `0.10.1`, checksum-verified) and
 IV's **`entire-agent-shelley`** plugin (`0.1.3`), which together implement the
-source-native authoring-context capture path adopted by ADR 0010. Neither needs a
+source-native authoring-context capture path retained by ADR 0014. Neither needs a
 login: capture works unauthenticated with the `git-branch` checkpoint backend.
 
 Before 2026-08-18 neither was installed by this script, so the *primary* ACR
@@ -70,10 +70,13 @@ was `0.8.42`, so the jump skipped `0.9.x` and re-qualification — not a bare
 version edit — was the gate. Re-qualify, then bump both together.
 
 Also installed: the vendored **`entire-agent-agentsview`** adapter
-(`vendor/entire-agent-agentsview/`), ADR 0010's attach-only backfill and
-reconciliation path, and the only one that can attach Claude Code or Codex
-sessions to a checkpoint. It was previously on `PATH` as a symlink into a *spike
-worktree*, so it broke if that worktree was pruned.
+(`vendor/entire-agent-agentsview/`), the attach-only bridge from AgentsView's
+fleet observability archive into Entire repository provenance. It can
+deliberately attach historical or otherwise uncaptured Claude Code, Codex,
+Shelley, and other normalized sessions to a checkpoint; it is not an automatic
+fallback or an independent copy of the native agent store. It was previously on
+`PATH` as a symlink into a _spike worktree_, so it broke if that worktree was
+pruned.
 
 Provisioning stops at the mechanism. It does **not** run `entire enable`, because
 that writes `.entire/settings.json` and git hooks into a repository — a per-repo
@@ -87,6 +90,22 @@ entire enable --agent shelley --project --telemetry=false --checkpoint-backend b
 
 `.entire/` is tracked in git, so enrolling once covers every worktree and future
 clone of that repository.
+
+### Agent-history architecture
+
+The two systems are intentionally complementary:
+
+- **AgentsView is session-centric fleet observability:** local collectors report
+  what agents are doing or attempted across tracked VMs, including failed,
+  abandoned, exploratory, uncommitted, and non-repository work; `iv-agentsview`
+  aggregates that operational history.
+- **Entire is change-centric repository provenance:** explicitly enrolled
+  repositories retain what agents proposed and changed, and why, in Git-linked
+  checkpoints suitable for the provider-neutral ACR review boundary.
+
+Transcript search overlaps, but the systems' selection and authority do not.
+AgentsView activity is not proof that a repository change landed, and Entire is
+not the fleet activity monitor.
 
 ### AgentsView source activation
 

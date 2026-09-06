@@ -88,12 +88,12 @@ What remains:
          in four places (settings, the `--checkpoint-backend` flag, and the
          verification block L204-208), so it currently *cannot* qualify `refs`;
          it needs a `refs`-aware variant. ~an afternoon.
-      2. **Confirm AgentsView reads `refs/entire/*`** — the real gate, and the
-         one thing the bench cannot answer. ADR 0010 makes AgentsView the
-         backfill/reconciliation path and it is built against the `v1` branch
-         layout; if it does not read the new refs, switching **silently breaks
-         reconciliation** (the exact quiet-provenance-loss failure this section
-         exists to prevent). Verify against the running AgentsView. If no, stop.
+      2. **Qualify `entire-agent-agentsview` attachment under `refs`.** The
+         adapter reads the local AgentsView session archive and hands a
+         transcript to Entire; it does not read either checkpoint layout.
+         Therefore the gate is an end-to-end attach test proving that Entire
+         persists the resulting checkpoint under `refs/entire/*`, not an
+         AgentsView compatibility claim about Git refs.
       3. **Decide existing history** — a switch does not migrate it. `iv-docs`
          already has 16 checkpoint commits on `origin/entire/checkpoints/v1`;
          new checkpoints would go to `refs/entire/*`, stranding the old ones
@@ -114,30 +114,6 @@ What remains:
       (~every 15s while active; 7.1% of one core sustained, 344 MB RSS).
       `serve` exposes no knob — only `--events-coalesce-interval` (SSE) and
       `--no-sync` (all-or-nothing).
-- [ ] Reconcile ADR 0010's "AgentsView is the fallback/backfill/reconciliation
-      path" language with the single-producer topology. Both AgentsView and
-      `entire-agent-shelley` read the *same* Shelley SQLite, so AgentsView cannot
-      be a fallback *for capture loss*: if that database is corrupt, truncated, or
-      a conversation never landed in it, both readers fail identically. It is a
-      second reader of one source, not a second source, and calling it a fallback
-      invites exactly the wrong conclusion — that the capture path is redundant
-      when it has a single point of failure.
-
-      Proposed reframing, to replace the fallback language rather than merely
-      soften it. AgentsView is:
-
-      1. the **read plane** — FTS, model attribution, health grading, MCP; and
-      2. the **cross-agent** capture path — it is the only thing that can attach
-         Claude Code or Codex sessions to a checkpoint, which
-         `entire-agent-shelley` cannot do at all. That is a real capture
-         capability, but for *different agents*, not a backup for the same one.
-
-      The single point of failure is the Shelley SQLite itself. If that risk is
-      worth mitigating, the mitigation is backing up that database — which
-      `install_shelley` already does per provision, via the SQLite backup API —
-      not a second reader of it. Verified 2026-08-18: 134/134 sessions match and
-      nothing is lost; tool traffic is relocated into `tool_calls` (16,417 rows),
-      not dropped.
 - [ ] `usage_events` is empty, so `cost_usd` is null and `agentsview usage` /
       `token-use` report nothing. Determine whether Shelley's usage data can be
       projected, or drop the cost-analytics claim.
