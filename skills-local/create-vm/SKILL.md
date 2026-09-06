@@ -1,6 +1,6 @@
 ---
 name: create-vm
-description: Create a new exe.dev VM on an IV base image from plain English, without leaving this VM. Use when asked to create/spin up/make a new VM on exeslim-dev (dev/agent box) or exeslim (deployment target). Runs `new` through the api-exe-new HTTP proxy, which carries a token scoped to that one command.
+description: Create a new exe.dev VM on an IV base image from plain English, without leaving this VM. Use when asked to create/spin up/make a new VM on exeslim-dev (dev/agent box) or exeslim (deployment target). Runs `new` through the api-exe-new HTTP proxy, then enrolls the VM in the AgentsView collector by creating its peer integration.
 ---
 
 # Create VM
@@ -22,19 +22,20 @@ the whole point: do not answer such a request with "run this on your Mac".
 injects a bearer token at its edge; the token never touches this VM and cannot be
 read from it. The scope is enforced server-side, so probing it is cheap and safe.
 
-Re-verified 2026-09-02 from `iv-provision`. **Four commands return 200:**
+Re-verified 2026-09-06 from `iv-provision`. **Five commands return 200:**
 
-| Command | Gives you |
-| --- | --- |
-| `new` | VM creation -- the point of the integration |
-| `ls` | full JSON inventory of every VM on the account |
-| `whoami` | owner email and the account's SSH keys |
-| `integrations list` | every integration, with config and attachments |
+| Command             | Gives you                                                                                                 |
+| ------------------- | --------------------------------------------------------------------------------------------------------- |
+| `new`               | VM creation -- the point of the integration                                                               |
+| `ls`                | full JSON inventory of every VM on the account                                                            |
+| `whoami`            | owner email and the account's SSH keys                                                                    |
+| `integrations list` | every integration, with config and attachments                                                            |
+| `integrations add`  | new integrations -- granted 2026-09-06 so this skill can enroll the VM it just made in AgentsView (below) |
 
 Everything else is **403 `command not allowed by token permissions`**: `rm`,
 `restart`, `resize`, `tag`, `cp`, `rename`, `comment`, `share`, `domain`, `stat`,
-`shelley`, `team`, `billing`, `pool`, `ssh-key list`, `integrations add` -- and
-even `help`.
+`shelley`, `team`, `billing`, `pool`, `ssh-key list`, `integrations attach`,
+`integrations edit`, `integrations remove` -- and even `help`.
 
 > Earlier revisions of this skill said `ls`, `whoami` and `integrations list` were
 > 403 (measured 2026-08-22, when the scope really was `--cmds=new`). The token has
@@ -50,17 +51,21 @@ Consequences to design around, not fight:
 - **You can check whether a name is taken.** `ls` works, so read the inventory
   before creating. exe.dev also rejects duplicates itself -- report its error
   verbatim rather than guessing.
-- **You cannot attach integrations or tag afterwards.** `integrations list` is
-  readable but `integrations add`/`attach` are not. Everything the VM will ever
-  need must be on the `new` line -- exe.dev fixes image, tags and integrations at
-  creation.
+- **You cannot attach existing integrations or tag afterwards.** `integrations
+attach` is 403, so everything the VM needs from the _existing_ catalogue must
+  be on the `new` line -- exe.dev fixes image and tags at creation. `integrations
+add` can create a _new_ integration and attach it in the same call, which is
+  exactly one thing here: the VM's own `av-src-<name>` peer integration.
 - **You cannot delete a VM.** A typo'd name is the user's to clean up in the
   lobby. So confirm the name back before creating.
 
 Widening the scope is a lobby operation the token cannot perform on its own
-(`ssh-key generate-api-key` is 403 here, by design). Granting `integrations add`
-in particular is not a small step: anything that can add an integration can
-attach an arbitrary credential to `auto:all`.
+(`ssh-key generate-api-key` is 403 here, by design). `integrations add` was
+granted deliberately, eyes open: anything that can add an integration can attach
+an arbitrary credential to `auto:all`. It cannot read or edit existing ones
+(`integrations edit`/`remove` are 403), and the peer key it mints for `av-src-*`
+is generated server-side and never visible here. The alternative -- the collector
+holding this scope -- would put it on the one VM that can read every archive.
 
 ## The call
 
@@ -86,7 +91,7 @@ itself. Create and provision in **one call**. Copy this verbatim, substituting
 only the name and sizes:
 
 ```bash
-curl -s --max-time 300 -X POST https://api-exe-new.int.exe.xyz/exec -d "new --name=<name> --tag=tailnet --image=ghcr.io/kylelundstedt/exeslim-dev:2026-08-28.24.1 --cpu=2 --memory=8GB --disk=15GB --prompt='sudo systemd-run --unit=iv-provision --collect --property=Type=oneshot --property=TimeoutStartSec=3600 --uid=exedev --setenv=HOME=/home/exedev /bin/bash -lc \"git clone https://github.com/kylelundstedt/iv-provision.git ~/iv-provision && git -C ~/iv-provision checkout 3.0.22 && ~/iv-provision/provision-iv.sh\"'"
+curl -s --max-time 300 -X POST https://api-exe-new.int.exe.xyz/exec -d "new --name=<name> --tag=tailnet --image=ghcr.io/kylelundstedt/exeslim-dev:2026-08-28.24.1 --cpu=2 --memory=8GB --disk=15GB --prompt='sudo systemd-run --unit=iv-provision --collect --property=Type=oneshot --property=TimeoutStartSec=3600 --uid=exedev --setenv=HOME=/home/exedev /bin/bash -lc \"git clone https://github.com/kylelundstedt/iv-provision.git ~/iv-provision && git -C ~/iv-provision checkout 3.0.23 && ~/iv-provision/provision-iv.sh\"'"
 ```
 
 `--tag=tailnet` carries the `api-tailscale` integration, which is what lets
@@ -104,7 +109,7 @@ work**, and fails in a way that looks like something else.
 
 `provision-iv.sh` installs IV's pinned Shelley, and to swap the binary it runs
 `systemctl stop shelley.socket` / `stop shelley.service`. A `--prompt` command
-*is* that service. So the script kills the session executing it, partway through:
+_is_ that service. So the script kills the session executing it, partway through:
 the agent reports `Tool did not stop within the grace period after cancellation;
 its output was discarded`, and the VM is left provisioned up to `install_shelley`
 with no lock file. Measured on `iv-canary-f` and `iv-canary-g`, 2026-08-22.
@@ -116,7 +121,7 @@ smoke PASS, **one pass, no repair step**.
 
 The reflex fix for the truncation -- "provision over SSH instead" -- is worse: a
 brand-new VM is not on the tailnet (so `ssh <name>` does not resolve) and the
-exe.dev edge `ssh <name>.exe.xyz` requires the *account owner's* key, which a
+exe.dev edge `ssh <name>.exe.xyz` requires the _account owner's_ key, which a
 fleet VM deliberately does not have (`Permission denied (publickey)`). That is a
 closed loop, confirmed on `iv-canary-e`, which had to be deleted unprovisioned.
 `--prompt` is the only way into a VM that does not exist yet.
@@ -146,11 +151,35 @@ session ended before it got a reply -- which is exactly what happens when
 `provision-iv.sh` restarts Shelley. It says nothing about the outcome.
 
 Measured on `iv-canary-j`: provisioning **completed at +28s** and the API returned
-that error at **+30s**. The error arrived two seconds *after* the work was
+that error at **+30s**. The error arrived two seconds _after_ the work was
 finished.
 
 So never report it as a failure, never recreate on it, and never "repair" a VM
 because of it. The lock file is the only verdict.
+
+### Enroll it in AgentsView
+
+Every agent-capable VM is a source the global collector on `iv-agentsview` pulls
+through a **peer integration**, and creating that integration is this skill's
+job -- it is the collector-side half of enrollment that used to be a manual step
+(and stopped happening: three VMs created 2026-08-29..09-03 were never enrolled).
+Right after `new` returns 200 -- the target VM must exist -- run:
+
+```bash
+curl -s --max-time 60 -X POST https://api-exe-new.int.exe.xyz/exec -d "integrations add http-proxy --name av-src-<name> --target https://<name>.exe.xyz:8080/ --peer --attach vm:iv-agentsview"
+```
+
+Expect `Added integration av-src-<name> (peer auth → <name>)`. That is all: the
+collector's daily reconcile lists its own attached `av-src-*` integrations and
+writes the matching `[[remote_hosts]]` block itself; `provision-iv.sh` (3.0.23+)
+puts the source daemon on loopback behind the VM's exe.dev auth proxy with the
+public fleet sync token. No token crosses anywhere, and nothing on the tailnet
+is involved. Only for exeslim-dev: a bare exeslim target runs no agent and gets
+no integration.
+
+Until the next reconcile the coverage check reports the VM as `UNCOVERED`; that
+is expected for under a day. A VM created any other way (web form, lobby) needs
+this one call made for it, or the same check keeps reporting it -- by design.
 
 ### exeslim -- deployment targets
 
@@ -169,10 +198,10 @@ image will join on its own, so it is then a manual `join-tailnet`.
 
 ## Pins
 
-| What | Value |
-| ---- | ----- |
+| What                         | Value             |
+| ---------------------------- | ----------------- |
 | image build ID (both images) | `2026-08-28.24.1` |
-| `iv-provision` tag | `3.0.22` |
+| `iv-provision` tag           | `3.0.23`          |
 
 Both images publish the same `<date>.<run>.<attempt>` build ID from one pipeline,
 so a single verified ID pins both. Bump them here when they move.
@@ -209,7 +238,7 @@ A 200 from `new` means **the VM was created**. It does not mean the VM is ready,
 and it says nothing about provisioning. Do not report success yet.
 
 1. Report the name and URL exe.dev returned. Ignore any `context deadline
-   exceeded` in the response.
+exceeded` in the response.
 2. **Wait for the tailnet.** The VM joins partway through `provision-iv.sh`
    (`install_tailscale` runs first, `install_shelley` last), so its appearance
    proves the prompt was received and the run is under way. Poll every 10s:
@@ -218,7 +247,7 @@ and it says nothing about provisioning. Do not report success yet.
    tailscale status | grep -w <name>
    ```
 
-   Note this is a *progress* signal, not a completion one -- a VM can be on the
+   Note this is a _progress_ signal, not a completion one -- a VM can be on the
    tailnet with provisioning still running, or (without `systemd-run`) dead.
 
 3. **Verify completion.** Once on the tailnet, `ssh <name>` works (Tailscale SSH,
@@ -230,19 +259,21 @@ and it says nothing about provisioning. Do not report success yet.
    ```
 
    `provision_repo_sha` must match the tag you pinned. A lock recording some
-   *other* sha is the exact failure `upgrade-vm` warns about -- provisioning
+   _other_ sha is the exact failure `upgrade-vm` warns about -- provisioning
    quietly ran an older recipe -- and a bare "is apex_version set?" check passes
    straight through it.
 
 4. Corroborate with the unit itself, which is the cleanest single check:
 
    ```bash
-   ssh <name> 'systemctl show iv-provision -p Result --value; systemctl is-active shelley.service'
+   ssh <name> 'systemctl show iv-provision -p Result --value; systemctl is-active shelley.service; systemctl --user is-active agentsview-source'
    ```
 
-   Expect `success` and `active`.
+   Expect `success`, `active`, `active`.
 
-5. Only then report success, naming the sha you verified.
+5. Confirm the enrollment call above returned `Added integration av-src-<name>`
+   (or that `integrations list` shows it). Then report success, naming the sha
+   you verified.
 
 **On timing:** a full provision has been measured at **~28 seconds** from `new`
 to lock (`iv-canary-j`, 2026-08-23) -- fast because it is ~10 pinned release
@@ -260,7 +291,7 @@ observed on a run that completed two seconds earlier. Go verify; do not recreate
 recipe. Re-provision at the right tag over the tailnet:
 
 ```bash
-ssh <name> 'cd ~/iv-provision && git fetch --tags --quiet && git checkout --detach 3.0.22 && ~/iv-provision/provision-iv.sh'
+ssh <name> 'cd ~/iv-provision && git fetch --tags --quiet && git checkout --detach 3.0.23 && ~/iv-provision/provision-iv.sh'
 ```
 
 **If the VM is on the tailnet but the lock never appears**, provisioning started
@@ -282,7 +313,7 @@ Recovery depends on who is asking:
 
   ```bash
   ssh <name>.exe.xyz "git clone https://github.com/kylelundstedt/iv-provision.git ~/iv-provision \
-    && git -C ~/iv-provision checkout 3.0.22 \
+    && git -C ~/iv-provision checkout 3.0.23 \
     && ~/iv-provision/provision-iv.sh"
   ```
 

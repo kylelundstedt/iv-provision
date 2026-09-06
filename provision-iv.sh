@@ -11,6 +11,11 @@ TIGRIS_VERSION=3.6.1
 RCLONE_VERSION=1.74.3
 HERDR_VERSION=0.7.4
 AGENTSVIEW_VERSION=0.38.1
+# Public fleet sync token for the AgentsView source daemon. Not a secret: the
+# daemon is on loopback behind the VM's exe.dev auth proxy, so a peer integration
+# is the access control and this only satisfies AgentsView's sync handshake. The
+# collector's reconcile job writes the same value into every peer block.
+AGENTSVIEW_FLEET_TOKEN=agentsview-fleet-peer
 SHELLEY_VERSION=0.959.914757635
 SHELLEY_TAG=v0.959.914757635
 SHELLEY_COMMIT=33df9d893b0de54d32942c7541841cb0e626baa2
@@ -992,34 +997,22 @@ install -m 0644 "$IV_REPO/systemd/agentsview-source.service" \
   "$HOME/.config/systemd/user/agentsview-source.service"
 SOURCE_ENV="$HOME/.config/agentsview/source.env"
 
-# Mint the per-host token if it is absent. It is a self-chosen random secret --
-# nothing issues it, nothing validates it beyond matching what the collector was
-# told -- so requiring a human to invent one and paste it in was pure ceremony,
-# and it made the AgentsView daemon the one part of provisioning that could not
-# complete unattended.
-#
-# Generated ONCE and never rotated: the collector stores this value in its own
-# [[remote_hosts]] block, so overwriting it here would silently break remote sync
-# on the next provision. Absent means new; present means leave it alone.
-#
-# Per-host rather than fleet-wide because the token guards READ access to the
-# whole normalized archive -- every prompt, response and tool call this VM has
-# seen. A shared secret would make one compromised VM a key to the entire fleet's
-# history. Uniqueness costs nothing once it is generated rather than typed.
-if [[ ! -s $SOURCE_ENV ]]; then
-  mkdir -p "$(dirname "$SOURCE_ENV")"
-  ( umask 077
-    printf 'AGENTSVIEW_AUTH_TOKEN=%s\n' "$(head -c 32 /dev/urandom | base64 | tr -d '\n')" \
-      > "$SOURCE_ENV" )
-  chmod 600 "$SOURCE_ENV"
-  echo "  generated a per-host AgentsView token ($SOURCE_ENV)"
+# Write the fleet sync token. Until 3.0.23 this minted a per-host random secret,
+# because the daemon listened on the tailnet and the token was the only lock;
+# the collector then had to be told each one by hand, which is the step that
+# silently stopped happening. The daemon now binds loopback behind the VM's
+# exe.dev auth proxy (bin/agentsview-source-daemon), the collector pulls through
+# an av-src-<vm> peer integration and enrolls itself from the integration list,
+# and the token is the public constant above. Rewritten on every provision so a
+# host carrying an old per-host token converges.
+mkdir -p "$(dirname "$SOURCE_ENV")"
+if [[ "$(cat "$SOURCE_ENV" 2>/dev/null)" != "AGENTSVIEW_AUTH_TOKEN=$AGENTSVIEW_FLEET_TOKEN" ]]; then
+  ( umask 077; printf 'AGENTSVIEW_AUTH_TOKEN=%s\n' "$AGENTSVIEW_FLEET_TOKEN" > "$SOURCE_ENV" )
+  echo "  wrote the fleet AgentsView sync token ($SOURCE_ENV)"
 fi
+chmod 600 "$SOURCE_ENV"
 
-if [[ -s $SOURCE_ENV ]] \
-    && grep -qE '^AGENTSVIEW_AUTH_TOKEN=.+$' "$SOURCE_ENV" \
-    && tailscale ip -4 >/dev/null 2>&1; then
-  chmod 600 "$SOURCE_ENV"
-
+if grep -qE '^AGENTSVIEW_AUTH_TOKEN=.+$' "$SOURCE_ENV"; then
   # Give the *CLI* the same token the daemon requires. The service runs
   # `--require-auth`, but `agentsview projects|health|sync` send no Authorization
   # header, so the authenticated endpoints answer 401 and the CLI reports it as
@@ -1065,11 +1058,11 @@ ROTATE
   sudo loginctl enable-linger "$USER"
   uctl daemon-reload
   uctl enable --now agentsview-source.service
-  echo "AgentsView source enabled (tailnet + per-host token present)"
+  echo "AgentsView source enabled (loopback, pulled through the av-src-$(hostname -s) peer integration)"
 else
   uctl disable --now agentsview-source.service >/dev/null 2>&1 || true
   uctl daemon-reload
-  echo "AgentsView source disabled; requires tailnet reachability and $SOURCE_ENV"
+  echo "AgentsView source disabled; $SOURCE_ENV is missing or empty"
 fi
 
 echo "== agent config =="

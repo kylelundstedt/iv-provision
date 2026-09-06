@@ -62,26 +62,29 @@ Three traps, all found the hard way:
 ### Directories that are not repos at all
 
 The question is not "does this have a `.git`" but "is this content committed
-*somewhere*". `iv-foundry-stage2`'s retirement was held moot most of a day over
+_somewhere_". `iv-foundry-stage2`'s retirement was held moot most of a day over
 ~31 MB judged unique because no repo of that name existed on GitHub -- while
-every file in it was byte-identical to a branch in a *different* repo. Hash the
+every file in it was byte-identical to a branch in a _different_ repo. Hash the
 files and look for them, rather than trusting the directory layout.
 
-## 2. Remove the AgentsView collector entry FIRST
+## 2. Remove the VM's AgentsView peer integration FIRST
 
 Before deleting the VM, not after. The collector polls on a timer; delete the VM
-first and it spends the gap scraping a host that no longer exists, which pages as
+first and it spends the gap pulling a host that no longer exists, which pages as
 a real outage.
 
-The collector runs on `klundstedt-mini` (a launchd job, `~/.agentsview/config.toml`),
-so this step happens there:
+The collector runs on `iv-agentsview` and enrolls sources from its own attached
+`av-src-*` peer integrations (daily reconcile), so retiring is one lobby command:
 
-```bash
-# remove the [[remote_hosts]] block whose host = "<old>", keep a timestamped backup,
-# validate the TOML still parses, then restart the collector.
+```
+integrations remove av-src-<old>
 ```
 
-A VM that was never enrolled has no block; that is fine and not an error.
+The next reconcile drops the `[[remote_hosts]]` block and restarts the
+collector; to not wait, `ssh iv-agentsview.exe.xyz ~/.local/bin/agentsview-reconcile`.
+A VM that was never enrolled has no integration; that is fine and not an error.
+(Hosts still on the tailnet path -- today only `klundstedt-mini` -- keep a
+hand-written block; edit it on the collector.)
 
 ## 3. Delete the VM
 
@@ -90,7 +93,7 @@ rm <old>
 ```
 
 From the lobby. Deliberately not available to any fleet VM's API token: `create-vm`
-is scoped `--cmds=new,ls,whoami,"integrations list"` precisely so an agent cannot
+is scoped `--cmds=new,ls,whoami,"integrations list","integrations add"` precisely so an agent cannot
 reach this step.
 
 ## 4. Restore the canonical name -- and the three things `rename` does NOT touch

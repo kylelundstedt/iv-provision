@@ -1,20 +1,21 @@
 #!/usr/bin/env bash
 # Foreground AgentsView source daemon for agent-capable IV VMs. systemd owns
-# this process. Network identity (Tailscale) and the per-host bearer token are
-# explicit prerequisites; provisioning never auto-enrolls the VM.
+# this process.
+#
+# Bound to LOOPBACK. The only way in is the VM's own exe.dev auth proxy, which
+# admits the account owner and any VM holding a peer integration to this VM --
+# in practice the global collector (iv-agentsview) through its av-src-<vm>
+# integration. Nothing on the tailnet or the exe.dev internal network can reach
+# port 8080 directly (measured 2026-09-06 on iv-cmg: eth0 and tailnet probes
+# refused, integration path 200). The tailnet is no longer on this data path.
+#
+# The sync token is the public fleet constant, written by provision-iv.sh. With
+# reachability enforced at the exe.dev edge it is a protocol formality that
+# AgentsView's HTTP sync happens to require, not a secret; no --require-auth.
 set -euo pipefail
 umask 077
 
 : "${AGENTSVIEW_AUTH_TOKEN:?AGENTSVIEW_AUTH_TOKEN is required}"
-command -v tailscale >/dev/null 2>&1 || {
-  echo "agentsview-source: tailscale is not installed" >&2
-  exit 1
-}
-TS_IP=$(tailscale ip -4 2>/dev/null | head -1)
-[[ -n $TS_IP ]] || {
-  echo "agentsview-source: VM is not joined to Tailscale" >&2
-  exit 1
-}
 
 # AgentsView otherwise falls forward to a different port when 8080 is busy,
 # which would leave the collector polling a dead endpoint. Fail closed instead.
@@ -45,18 +46,15 @@ AGENTSVIEW_BIN=${AGENTSVIEW_BIN:-/usr/local/bin/agentsview}
   exit 1
 }
 
+# AgentsView rejects a request whose Host is not its trusted origin. Through
+# the exe.dev proxy the Host that arrives is this VM's own public name with the
+# port -- not the caller's av-src-<vm>.int.exe.xyz alias (measured 2026-09-06).
 HOSTNAME=$(hostname -s)
-TAILNET=$(tailscale status --json 2>/dev/null | jq -r '.MagicDNSSuffix // empty')
-[[ -n $TAILNET ]] || {
-  echo "agentsview-source: Tailscale MagicDNS suffix unavailable" >&2
-  exit 1
-}
-PUBLIC_URL="http://${HOSTNAME}.${TAILNET}:8080"
+PUBLIC_URL="https://${HOSTNAME}.exe.xyz:8080"
 
 exec "$AGENTSVIEW_BIN" serve \
-  --host "$TS_IP" \
+  --host 127.0.0.1 \
   --port 8080 \
   --public-url "$PUBLIC_URL" \
   --no-browser \
-  --no-update-check \
-  --require-auth
+  --no-update-check

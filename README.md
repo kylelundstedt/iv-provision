@@ -57,7 +57,7 @@ IV's **`entire-agent-shelley`** plugin (`0.1.3`), which together implement the
 source-native authoring-context capture path retained by ADR 0014. Neither needs a
 login: capture works unauthenticated with the `git-branch` checkpoint backend.
 
-Before 2026-08-18 neither was installed by this script, so the *primary* ACR
+Before 2026-08-18 neither was installed by this script, so the _primary_ ACR
 capture path was hand-placed and did not survive a VM recreate — unlike a missing
 tool, that gap loses provenance and does so silently.
 
@@ -109,20 +109,24 @@ not the fleet activity monitor.
 
 ### AgentsView source activation
 
-AgentsView `0.38.1` is installed on every IV VM. Its source daemon is fail-closed:
-it stays disabled until the VM is on the tailnet, since it serves the whole
-normalized archive over HTTP and has no business listening anywhere else.
+AgentsView `0.38.1` is installed on every IV VM. Its source daemon binds
+**loopback** only: the one way in is the VM's own exe.dev auth proxy, which
+admits the account owner and any VM holding a peer integration to this VM -- in
+practice the global collector on `iv-agentsview`, through the `av-src-<vm>`
+integration the `create-vm` skill makes at creation. Nothing on the tailnet or
+the exe.dev internal network reaches port `8080` directly.
 
-**Nothing to do by hand.** Provisioning generates the per-host token if it is
-absent, writes it at mode `0600`, and enables the service once the VM is joined.
-The service binds only the VM's Tailscale IPv4 address on port `8080`.
+**Nothing to do by hand.** Provisioning writes the public fleet sync token
+(`AGENTSVIEW_FLEET_TOKEN` in `provision-iv.sh`) to `source.env` at mode `0600`
+and enables the service. The collector enrolls the host itself from its
+integration list, daily. The token is not a secret: with reachability enforced
+at the exe.dev edge it only satisfies AgentsView's sync handshake.
 
-The token used to be a manual step: the docs told you to invent a
-`<unique-token>`, paste it into `source.env`, and re-run the provisioner. That was
-ceremony. The value is a self-chosen random secret -- nothing issues it and nothing
-validates it beyond matching what the collector was told -- so a human typing it
-added no security and made the daemon the one part of provisioning that could not
-complete unattended (fixed 2026-08-19).
+Before 3.0.23 the daemon listened on the VM's Tailscale address behind a
+per-host random token, and that token had to be copied into the collector's
+config by hand -- the step that quietly stopped happening once VM creation moved
+off the laptop. The history is in the dotfiles repo,
+`agent_docs/agentsview-peer-path.md`.
 
 It is generated **once and never rotated**: the collector stores the value in its
 own `[[remote_hosts]]` block, so re-minting on every provision would silently break
@@ -163,21 +167,21 @@ request with CI green. **Provisioning changes originate on the `iv-provision`
 VM**, which is the only host carrying the `repo-iv-provision-rw` and
 `repo-exeslim-rw` integrations.
 
-The write integrations *are* the boundary. This is not a convention asking to be
+The write integrations _are_ the boundary. This is not a convention asking to be
 remembered: a fleet VM without a writable integration cannot push, so "where did
 this change come from" has a mechanical answer rather than an honour-system one.
 
 ### Why a single writer, when PR + CI already gates merges
 
-Between 2026-08-18 and 2026-08-19 this section said the opposite — *any host may
-author* — on the reasoning that single-workstation authoring had never been
+Between 2026-08-18 and 2026-08-19 this section said the opposite — _any host may
+author_ — on the reasoning that single-workstation authoring had never been
 enforced by permissions and PR + CI was the guardrail that actually held. Two
 things from the 2026-08-19 fleet refresh argue the other way, and the rule was
 restored the same day.
 
 **PR + CI gates what merges, not what gets tried.** `iv-docs` was found carrying
 two unpushed commits, one of them a fix for the Shelley socket-activation race
-that `main` had *already* fixed differently and better (`bd5c11f`, shipped as
+that `main` had _already_ fixed differently and better (`bd5c11f`, shipped as
 `3.0.1`). Two hosts independently solved one bug; the fleet VM's version was
 never wrong enough to notice and never right enough to merge. It also documented
 itself as "fixed in 2.9.1" — a tag that was never cut. That is the specific
@@ -185,7 +189,7 @@ failure mode of distributed authoring on a repo whose entire job is to be the on
 agreed description of a machine.
 
 **A VM fixing its own provisioner cannot cleanly test the fix.** The provisioner
-is the thing under change *and* the thing running; a defect that only manifests
+is the thing under change _and_ the thing running; a defect that only manifests
 on older bases (as the 3.0.9 PATH-probe bug did) is invisible from a VM that has
 already been re-provisioned. The authoring host is deliberately not a workload
 VM, so it can hold a checkout at an arbitrary revision without disrupting work.
@@ -214,14 +218,14 @@ curl -fsS -X POST https://github.int.exe.xyz/api/v3/repos/kylelundstedt/<repo>/p
   -d '{"title":"...","head":"<branch>","base":"main"}'
 ```
 
-`api.github.com` is *not* the endpoint to use here — unauthenticated it can read
+`api.github.com` is _not_ the endpoint to use here — unauthenticated it can read
 public state but cannot create anything, which reads as "the API does not work
 from a VM" if that is the only thing tried.
 
 **On a fork, always pass `base`, and check where the PR landed.** GitHub's
 web "compare" UI defaults the base to the **upstream parent**, not to your own
 `main`. `kylelundstedt/exeslim` is a fork of `ryanlewis/exeslim`, so visiting the
-`pull/new/<branch>` link after a push proposes the branch *to upstream* — which
+`pull/new/<branch>` link after a push proposes the branch _to upstream_ — which
 is how a one-file, +14-line fork-only change became a 10-commit, +319-line PR
 against someone else's repository (`ryanlewis/exeslim#13`, 2026-08-19). Every
 commit on our `main` that upstream lacks gets swept in, because the diff is
@@ -229,7 +233,7 @@ computed against upstream's `main`, and a `FORK.md` edit is by construction
 never a merge candidate upstream.
 
 The API form above is not subject to that default: `base` is explicit, and the
-URL names the repository the PR is opened *on*. Verify after creating it:
+URL names the repository the PR is opened _on_. Verify after creating it:
 
 ```bash
 curl -fsS https://api.github.com/repos/kylelundstedt/<repo>/pulls/<n> \
@@ -255,39 +259,39 @@ for them — so they live here as the standing rule.
 
 ### Integrations: `<kind>-<subject>[-<variant>]`, named for function
 
-The **kind** prefix says what the integration *is*, so its purpose is readable
+The **kind** prefix says what the integration _is_, so its purpose is readable
 without opening it:
 
-| Prefix   | Meaning                                   | Examples |
-| -------- | ----------------------------------------- | -------- |
-| `repo-`  | a git repository credential               | `repo-iv-provision-rw`, `repo-gitlake-ro` |
-| `mcp-`   | an MCP server for agents                  | `mcp-motherduck`, `mcp-github-home` |
-| `api-`   | a plain HTTP API proxy (not MCP)          | `api-tailscale`, `api-notion`, `api-fannie-sso` |
-| `bucket-`| object storage                            | `bucket-gitlake-examples` |
-| `svc-`   | a catalog (`integrations catalog`) service credential | `svc-notion-songs`, `svc-telnyx-test` |
+| Prefix    | Meaning                                               | Examples                                        |
+| --------- | ----------------------------------------------------- | ----------------------------------------------- |
+| `repo-`   | a git repository credential                           | `repo-iv-provision-rw`, `repo-gitlake-ro`       |
+| `mcp-`    | an MCP server for agents                              | `mcp-motherduck`, `mcp-github-home`             |
+| `api-`    | a plain HTTP API proxy (not MCP)                      | `api-tailscale`, `api-notion`, `api-fannie-sso` |
+| `bucket-` | object storage                                        | `bucket-gitlake-examples`                       |
+| `svc-`    | a catalog (`integrations catalog`) service credential | `svc-notion-songs`, `svc-telnyx-test`           |
 
 Git-credential integrations additionally carry an access **variant**, `-rw` or
-`-ro`, because whether a host can *write* a repo is the load-bearing fact (see
+`-ro`, because whether a host can _write_ a repo is the load-bearing fact (see
 **Authoring boundary** above). So the full form for repos is
 `repo-<repo>-<rw|ro>`.
 
 **Platform integrations are exempt.** `llm`, `notify`, and `reflection` are
 provided by exe.dev itself, carry fixed single-word names, and are attached
-`auto:all`; the convention governs the integrations *you* create, not these.
+`auto:all`; the convention governs the integrations _you_ create, not these.
 
 The rule that matters most is **name for function, never for an incidental**:
 
-- `api-github-copilot-home` named the upstream URL's *brand*
+- `api-github-copilot-home` named the upstream URL's _brand_
   (`api.githubcopilot.com`) and read as "the GitHub Copilot product", which is
   not what it is — it is the GitHub **MCP** server. Renamed to `mcp-github-home`.
   The `mcp-` vs `api-` split exists precisely for this: both are `http-proxy`
-  integrations, so the *type* cannot tell an agent-facing MCP server from a plain
+  integrations, so the _type_ cannot tell an agent-facing MCP server from a plain
   API — only the name can. The test is **function, not upstream URL**: an MCP
   server is `mcp-` even when its target is `api.motherduck.com`, which is why
   `api-motherduck-mcp` (an MCP server wearing an `api-` name) was renamed
   `mcp-motherduck`.
 - The legacy `github-<owner>-<repo>` and `<owner>-<repo>` schemes name the GitHub
-  *account*, an incidental. They are migrated to `repo-<repo>-<rw|ro>`. A github
+  _account_, an incidental. They are migrated to `repo-<repo>-<rw|ro>`. A github
   integration's name is not referenced by any VM config (git addresses the repo
   by URL, `https://github.int.exe.xyz/<owner>/<repo>.git`), so these renames are
   cosmetic — no reconfiguration, no re-provision.
@@ -301,7 +305,7 @@ A tag is one of two things, never both:
   key-minting), `notion` (the Notion API), `mcp-agent` (the MCP server set),
   `fannie-sflpd` (the Fannie repo) all pass.
 - An **identity tag** may exist, but **grants nothing**. The moment an identity
-  tag attaches an integration, fleet *membership* silently governs *access* —
+  tag attaches an integration, fleet _membership_ silently governs _access_ —
   which is `auto:all`'s failure mode wearing a friendly name. `tag:iv` failed
   this: it read as "this is an IV VM" while quietly also granting MotherDuck and
   GitHub MCP, so it was retired in favour of the capability tag `mcp-agent`.
@@ -337,24 +341,24 @@ attribute to the GitHub account rather than the exe.dev app. The legacy
 
 Remaining renames to the convention:
 
-| Current name | Rename to | Note |
-| ------------ | --------- | ---- |
-| `api-motherduck-mcp` | `mcp-motherduck` | It is an MCP server; the name referenced the upstream URL. Team integration, so its `/mcp` URL lives in `agent/mcp-servers.json` and both `mcp.manifest` copies — rename is create-new → repoint → delete-old, then re-register the `motherduck` MCP server on IV VMs. |
-| `notion-songs` | `svc-notion-songs` | catalog service credential |
-| `telnyx-test` | `svc-telnyx-test` | catalog service credential |
+| Current name         | Rename to          | Note                                                                                                                                                                                                                                                                   |
+| -------------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `api-motherduck-mcp` | `mcp-motherduck`   | It is an MCP server; the name referenced the upstream URL. Team integration, so its `/mcp` URL lives in `agent/mcp-servers.json` and both `mcp.manifest` copies — rename is create-new → repoint → delete-old, then re-register the `motherduck` MCP server on IV VMs. |
+| `notion-songs`       | `svc-notion-songs` | catalog service credential                                                                                                                                                                                                                                             |
+| `telnyx-test`        | `svc-telnyx-test`  | catalog service credential                                                                                                                                                                                                                                             |
 
 ## Doing control-plane work from a VM
 
 Two hand-written skills exist so that creating things does not require a laptop,
 a terminal, or an SSH key — a request typed into the **Prompt Shelley** box on a
 phone reaches a VM, and the VM can act. Both work the same way: an exe.dev
-http-proxy integration holds the credential *at the edge*, and the VM sends an
+http-proxy integration holds the credential _at the edge_, and the VM sends an
 unauthenticated request to an `int.exe.xyz` host.
 
-| Skill | Integration | Creates |
-| ----- | ----------- | ------- |
-| `create-vm` | `api-exe-new` (exe.dev CLI over HTTPS, `--cmds=new`) | exe.dev VMs on an IV base image |
-| `create-repo` | `mcp-github-home` (GitHub's hosted MCP server) | GitHub repos, seeded with files |
+| Skill         | Integration                                          | Creates                         |
+| ------------- | ---------------------------------------------------- | ------------------------------- |
+| `create-vm`   | `api-exe-new` (exe.dev CLI over HTTPS, `--cmds=new`) | exe.dev VMs on an IV base image |
+| `create-repo` | `mcp-github-home` (GitHub's hosted MCP server)       | GitHub repos, seeded with files |
 
 The shape is worth stating once, because it generalises: **a capability the VM
 should have is an integration scoped to exactly that capability, not a token.**
@@ -372,12 +376,12 @@ skills:
   tool at all, so in both cases a mistyped name is the owner's to clean up.
   Confirm the name back before creating; that is the only guard there is.
 
-`mcp-github-home` also creates a second write path to GitHub that does *not* go
+`mcp-github-home` also creates a second write path to GitHub that does _not_ go
 through the `repo-*-rw` integrations. Read **Authoring boundary** above with that
 in mind: the single-writer rule for `iv-provision` and `exeslim` is enforced by
 attachment, and MCP writes are not scoped per repo the way git integrations are.
 The rule therefore has to be honoured rather than merely relied upon — use the
-MCP write path for repos that have no integration *yet*, never to route around
+MCP write path for repos that have no integration _yet_, never to route around
 one deliberately withheld.
 
 ## General-purpose Markdown with Apex
@@ -420,11 +424,11 @@ rather than argument. exe.dev supports an opt-in label —
 
 So a custom image loses Shelley only **by default**, not necessarily. What
 remains true is that a custom image is not recognised as "exeuntu", so anything
-keying off that (`EXEUNTU=1`) is absent — note `/exe.dev/etc/image.conf` *is*
+keying off that (`EXEUNTU=1`) is absent — note `/exe.dev/etc/image.conf` _is_
 present on a custom-image VM and carries the image's own OCI labels, which is
 how `~/iv-provision.lock` records base provenance.
 
-The real reason the *tooling* stays a script is different, and it survives the
+The real reason the _tooling_ stays a script is different, and it survives the
 correction: **exe.dev fixes a VM's image at creation and offers no way to move a
 live VM onto a newer one** (`new`, `rm`, `restart`, `cp`, `resize` — `cp` clones
 the disk you already have). Every version bump in the pinned tool list at the
@@ -442,18 +446,18 @@ and this script continuing to carry the volatile, version-pinned tools. See
 
 ## Layout
 
-| File                    | Role                                                                                                                                                       |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `provision-iv.sh`       | Provisions the IV layer onto the IV base image (tailscale, uv, claude, codex, Entire + plugins, DuckDB, Apex, tigris/rclone, herdr, AgentsView, doc-site tools, agent config, skills); writes `~/iv-provision.lock`. |
-| `vendor-skills.sh`      | Refreshes the vendored skills snapshot in `skills/` (needs node/npx).                                                                                      |
-| `skills/`               | Vendored, pinned team skills — committed to the repo so they are frozen.                                                                                   |
-| `bin/`                  | `render-site` + `provision-docsite` + `gen-llms-txt` + `install-cloud-cli` (on-demand aws/azure/gcloud) — installed onto PATH.                                 |
-| `agent/`                | Team agent config: `AGENTS.md`, Claude Code `settings.json`, Codex `config.toml`, MCP setup.                                                               |
-| `vendor/`               | Third-party/IV code vendored with a SHA pin verified at install (`entire-agent-agentsview`).                                                               |
-| `provisioning/`         | Declarative source for the team layer: `skills.manifest`, `mcp.manifest`, `agents-shared.md`. `vendor-skills.sh` reads these; nothing is fetched from another repository. |
-| `tests/`                | Validation suite: `smoke-provision.sh` (run on a VM after provisioning), `test-provision.sh`, `test-ssh-guard.sh`, Python unit tests — run by CI.          |
-| `skills-local/`         | Hand-written in-tree skills (`join-tailnet`, `upgrade-vm`, `create-vm`, `create-repo`), installed alongside the vendored set. `vendor-skills.sh` never touches this path — it `rm -rf`s `skills/`, so a hand-written skill there would vanish silently. |
-| `*.qmd` / `*.md`        | Markdown documentation sources, readable in-repo and served by `provision-docsite` on any IV VM.                                                               |
+| File               | Role                                                                                                                                                                                                                                                    |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `provision-iv.sh`  | Provisions the IV layer onto the IV base image (tailscale, uv, claude, codex, Entire + plugins, DuckDB, Apex, tigris/rclone, herdr, AgentsView, doc-site tools, agent config, skills); writes `~/iv-provision.lock`.                                    |
+| `vendor-skills.sh` | Refreshes the vendored skills snapshot in `skills/` (needs node/npx).                                                                                                                                                                                   |
+| `skills/`          | Vendored, pinned team skills — committed to the repo so they are frozen.                                                                                                                                                                                |
+| `bin/`             | `render-site` + `provision-docsite` + `gen-llms-txt` + `install-cloud-cli` (on-demand aws/azure/gcloud) — installed onto PATH.                                                                                                                          |
+| `agent/`           | Team agent config: `AGENTS.md`, Claude Code `settings.json`, Codex `config.toml`, MCP setup.                                                                                                                                                            |
+| `vendor/`          | Third-party/IV code vendored with a SHA pin verified at install (`entire-agent-agentsview`).                                                                                                                                                            |
+| `provisioning/`    | Declarative source for the team layer: `skills.manifest`, `mcp.manifest`, `agents-shared.md`. `vendor-skills.sh` reads these; nothing is fetched from another repository.                                                                               |
+| `tests/`           | Validation suite: `smoke-provision.sh` (run on a VM after provisioning), `test-provision.sh`, `test-ssh-guard.sh`, Python unit tests — run by CI.                                                                                                       |
+| `skills-local/`    | Hand-written in-tree skills (`join-tailnet`, `upgrade-vm`, `create-vm`, `create-repo`), installed alongside the vendored set. `vendor-skills.sh` never touches this path — it `rm -rf`s `skills/`, so a hand-written skill there would vanish silently. |
+| `*.qmd` / `*.md`   | Markdown documentation sources, readable in-repo and served by `provision-docsite` on any IV VM.                                                                                                                                                        |
 
 ## Reproducibility
 

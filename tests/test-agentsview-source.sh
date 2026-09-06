@@ -7,14 +7,6 @@ TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 mkdir -p "$TMP/bin" "$TMP/home"
 
-cat > "$TMP/bin/tailscale" <<'EOF'
-#!/bin/sh
-case "$1" in
-  ip) echo 100.64.0.10 ;;
-  status) echo '{"MagicDNSSuffix":"example.ts.net"}' ;;
-  *) exit 1 ;;
-esac
-EOF
 cat > "$TMP/bin/hostname" <<'EOF'
 #!/bin/sh
 echo source-canary
@@ -45,10 +37,11 @@ HOME="$TMP/home" PATH="$TMP/bin:$PATH" \
   "$WRAPPER"
 
 grep -qx 'serve' "$ARGS"
-grep -qx '100.64.0.10' "$ARGS"
-grep -qx 'http://source-canary.example.ts.net:8080' "$ARGS"
-grep -qx -- '--require-auth' "$ARGS"
+grep -qx '127.0.0.1' "$ARGS"
+grep -qx 'https://source-canary.exe.xyz:8080' "$ARGS"
+! grep -qx -- '--require-auth' "$ARGS"
 ! grep -qx '0.0.0.0' "$ARGS"
+! grep -q 'ts.net' "$ARGS"
 [[ $(stat -c '%a' "$TMP/home/.agentsview") == 700 ]]
 
 # Assertions below use an explicit `|| { ...; exit 1; }` rather than a bare
