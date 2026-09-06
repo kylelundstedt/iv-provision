@@ -4,8 +4,10 @@
 The adapter is deliberately attach-only. It exports a normalized AgentsView
 session as Entire-compatible JSONL without modifying AgentsView or any native
 agent store. Claude/Codex should normally use Entire's native integrations;
-this adapter is the universal fallback/backfill/reconciliation path. Shelley
-normally uses the direct `entire-agent-shelley` plugin.
+Shelley normally uses the direct `entire-agent-shelley` plugin. This adapter is
+a reviewed bridge for historical attachment, unsupported-agent import, and
+native-versus-normalized reconciliation. It is not independent capture
+redundancy when both readers depend on the same native session store.
 """
 
 from __future__ import annotations
