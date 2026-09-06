@@ -34,7 +34,7 @@ Dotfiles-side edits. `repo-dotfiles` is attached to `vm:iv-provision` with
       check caught a stale iv-image-vs-iv-provision comment in the shared
       AGENTS.md block, now converged across all three copies.
 - [ ] Drop the copy of `entire-push-exclude.txt` that moved to `provisioning/`
-      here. **Re-scoped 2026-08-19:** it is *not* a dead duplicate — the dotfiles
+      here. **Re-scoped 2026-08-19:** it is _not_ a dead duplicate — the dotfiles
       copy is the live input read by dotfiles' own `entire-push-check`
       (`maint/.local/bin/entire-push-check`, run by the launchd plist). Deduping
       means repointing that checker at a single source first, then dropping the
@@ -57,7 +57,7 @@ macOS-only and part of the auditing control plane rather than the audited VMs.
 What remains:
 
 - [x] ~~Enroll `ave-adapters` in Entire ACR capture.~~ Done: `ff5cc95 chore:
-      enable Entire Shelley capture` (2026-08-18) is on `origin/main`, settings
+    enable Entire Shelley capture` (2026-08-18) is on `origin/main`, settings
       byte-identical to `fannie-sflpd`/`iv-docs` (git-branch backend, telemetry
       off, external agents on), tracking only `.entire/settings.json` and
       `.entire/.gitignore` so all nine worktrees and future clones inherit it.
@@ -81,27 +81,23 @@ What remains:
       metadata byte-identical (`full.jsonl`/`metadata.json`/`prompt.txt`/
       `transcript.jsonl`). Storage moves to `refs/entire/checkpoints/<shard>/<id>`,
       **outside** `refs/heads/*`; propagation is the backend-aware `entire hooks
-      git pre-push` hook, not a push refspec. So the plugin side is cheap. The
-      cost is elsewhere, and is why this is not a flag flip:
-      1. **Qualify `refs` against 0.1.3** — the live suite
-         (`test-shelley-live.sh`) hard-codes `refs/heads/entire/checkpoints/v1`
-         in four places (settings, the `--checkpoint-backend` flag, and the
-         verification block L204-208), so it currently *cannot* qualify `refs`;
-         it needs a `refs`-aware variant. ~an afternoon.
-      2. **Qualify `entire-agent-agentsview` attachment under `refs`.** The
-         adapter reads the local AgentsView session archive and hands a
-         transcript to Entire; it does not read either checkpoint layout.
-         Therefore the gate is an end-to-end attach test proving that Entire
-         persists the resulting checkpoint under `refs/entire/*`, not an
-         AgentsView compatibility claim about Git refs.
-      3. **Decide existing history** — a switch does not migrate it. `iv-docs`
-         already has 16 checkpoint commits on `origin/entire/checkpoints/v1`;
-         new checkpoints would go to `refs/entire/*`, stranding the old ones
-         unless a dual-read or a one-time migration copies them. Per enrolled
-         repo (`iv-docs`, `fannie-sflpd*`, `ave-adapters`, ...).
-      4. **Flip fleet-wide as one coordinated change** — `settings.json` is
-         committed and inherited by all worktrees/clones, so mixing backends
-         across enrolled repos fragments how checkpoints are read. All-or-nothing.
+    git pre-push` hook, not a push refspec. So the plugin side is cheap. The
+      cost is elsewhere, and is why this is not a flag flip: 1. **Qualify `refs` against 0.1.3** — the live suite
+      (`test-shelley-live.sh`) hard-codes `refs/heads/entire/checkpoints/v1`
+      in four places (settings, the `--checkpoint-backend` flag, and the
+      verification block L204-208), so it currently _cannot_ qualify `refs`;
+      it needs a `refs`-aware variant. ~an afternoon. 2. **Qualify `entire-agent-agentsview` attachment under `refs`.** The
+      adapter reads the local AgentsView session archive and hands a
+      transcript to Entire; it does not read either checkpoint layout.
+      Therefore the gate is an end-to-end attach test proving that Entire
+      persists the resulting checkpoint under `refs/entire/*`, not an
+      AgentsView compatibility claim about Git refs. 3. **Decide existing history** — a switch does not migrate it. `iv-docs`
+      already has 16 checkpoint commits on `origin/entire/checkpoints/v1`;
+      new checkpoints would go to `refs/entire/*`, stranding the old ones
+      unless a dual-read or a one-time migration copies them. Per enrolled
+      repo (`iv-docs`, `fannie-sflpd*`, `ave-adapters`, ...). 4. **Flip fleet-wide as one coordinated change** — `settings.json` is
+      committed and inherited by all worktrees/clones, so mixing backends
+      across enrolled repos fragments how checkpoints are read. All-or-nothing.
       Trigger to actually do it: upstream deprecating `branch`, or hitting the
       push-contention `refs` was built for (we are not — low concurrency per
       repo). Until then `branch` is qualified, fleet-consistent, and carrying
@@ -130,7 +126,7 @@ What remains:
       Our fork adds eight commits upstream lacks (own GHCR namespace, the
       `exeslim-dev` image, `openssh-client`/`nginx-light`/`libyaml-0-2`, Shelley
       units, `FORK.md`) — all legitimate fork content, none of it upstream-bound.
-      The structural point still holds as an *ongoing* task, not a backlog item:
+      The structural point still holds as an _ongoing_ task, not a backlog item:
       the weekly rebuild runs against **our** Dockerfile, so re-fetch upstream
       periodically and merge if it moves — there is simply nothing outstanding
       right now.
@@ -140,38 +136,38 @@ What remains:
       upgrade one.
 
       What a stale base actually costs is narrow, and worth stating plainly so
-      the decision is not made out of vague unease: CVEs land via
-      `iv-apt-upgrade.timer` on every VM daily, so a stale base does **not** mean
-      unpatched packages. What it misses is *newly added* packages (e.g.
-      `nginx-light`, `openssh-client`) and image-level changes to the boot path.
+          the decision is not made out of vague unease: CVEs land via
+          `iv-apt-upgrade.timer` on every VM daily, so a stale base does **not** mean
+          unpatched packages. What it misses is *newly added* packages (e.g.
+          `nginx-light`, `openssh-client`) and image-level changes to the boot path.
 
-      Fleet state 2026-08-29 -- the pre-exeslim `exeuntu` base is fully retired:
+          Fleet state 2026-08-29 -- the pre-exeslim `exeuntu` base is fully retired:
 
-      | Base | Shell | VMs |
-      | ---- | ----- | --- |
-      | `exeslim-dev` `2026-08-19.13.1` | bash | `iv-cli`, `fannie-sflpd-poc` |
-      | `exeslim-dev` `2026-08-18.11.1` | bash | `iv-provision`, `kgl-songs`, `telnyx-vm`, `kgl-thoughts` |
-      | `exeslim-dev` `2026-07-29.6.1` | zsh | `iv-docs`, `iv-ave-adapters`, `iv-gitlake`, `iv-gitlake-examples`, `iv-home`, `iv-entire-agent-shelley`, `iv-foundry-stage2` |
+          | Base | Shell | VMs |
+          | ---- | ----- | --- |
+          | `exeslim-dev` `2026-08-19.13.1` | bash | `iv-cli`, `fannie-sflpd-poc` |
+          | `exeslim-dev` `2026-08-18.11.1` | bash | `iv-provision`, `kgl-songs`, `telnyx-vm`, `kgl-thoughts` |
+          | `exeslim-dev` `2026-07-29.6.1` | zsh | `iv-docs`, `iv-ave-adapters`, `iv-gitlake`, `iv-gitlake-examples`, `iv-home`, `iv-entire-agent-shelley`, `iv-foundry-stage2` |
 
-      Done 2026-08-19/20: `kgl-apex` dropped (only ever used to open a PR);
-      `kgl-songs`, `telnyx-vm`, and `kgl-thoughts` recreated onto `exeslim-dev`.
-      **No exeuntu-base VMs remain.**
+          Done 2026-08-19/20: `kgl-apex` dropped (only ever used to open a PR);
+          `kgl-songs`, `telnyx-vm`, and `kgl-thoughts` recreated onto `exeslim-dev`.
+          **No exeuntu-base VMs remain.**
 
-      **Every VM above predates the `.bashrc` PATH fix** (exeslim#6, first in
-      `2026-08-28.24.1`). On the bash-shell rows the `~/.local/bin` export is
-      below skel's non-interactive guard, so `ssh <vm> '<cmd>'` gets no user
-      PATH -- `provision-docsite` failed exactly that way on `iv-cli` and
-      `fannie-sflpd-poc` (2026-08-29). The zsh rows are accidentally immune
-      (`.zshenv` is read on every invocation), which is why the bug survived so
-      long. `iv-cli`, `kgl-songs` and `fannie-sflpd-poc` carry a hand-applied
-      fix (backup at `~/.bashrc.pre-pathfix`); it survives re-provisioning but
-      NOT recreation. Recreating onto `2026-08-28.24.1`+ is the durable fix and
-      makes the hand patches unnecessary.
+          **Every VM above predates the `.bashrc` PATH fix** (exeslim#6, first in
+          `2026-08-28.24.1`). On the bash-shell rows the `~/.local/bin` export is
+          below skel's non-interactive guard, so `ssh <vm> '<cmd>'` gets no user
+          PATH -- `provision-docsite` failed exactly that way on `iv-cli` and
+          `fannie-sflpd-poc` (2026-08-29). The zsh rows are accidentally immune
+          (`.zshenv` is read on every invocation), which is why the bug survived so
+          long. `iv-cli`, `kgl-songs` and `fannie-sflpd-poc` carry a hand-applied
+          fix (backup at `~/.bashrc.pre-pathfix`); it survives re-provisioning but
+          NOT recreation. Recreating onto `2026-08-28.24.1`+ is the durable fix and
+          makes the hand patches unnecessary.
 
-      3.0.20 also pins the interpreter of the installed doc-site tools, so those
-      no longer depend on the user PATH at all -- the two fixes are independent
-      and both wanted (systemd, cron and `sudo` secure_path have no
-      `~/.local/bin` regardless of the image).
+          3.0.20 also pins the interpreter of the installed doc-site tools, so those
+          no longer depend on the user PATH at all -- the two fixes are independent
+          and both wanted (systemd, cron and `sudo` secure_path have no
+          `~/.local/bin` regardless of the image).
 
 ### Base recreate playbook (from the kgl-songs / telnyx-vm / kgl-thoughts migrations)
 
@@ -182,7 +178,7 @@ Telnyx webhook URL, blog DNS all key off it). What bit us, in order of surprise:
 
 - **`vm:` integration attachments do NOT survive a recreate.** All three of
   telnyx-vm's integrations (`repo-telnyx-vm-rw`, `svc-telnyx-test`,
-  `bucket-telnyx-vm`) came back detached; only the `tailnet` *tag* survived,
+  `bucket-telnyx-vm`) came back detached; only the `tailnet` _tag_ survived,
   because `--tag=tailnet` was passed at `new`. **Prefer a durable tag over `vm:`
   for anything a recreate must keep** (as `kgl-songs` already does via
   `tag:kylelundstedt-songs`). Re-attach `vm:` integrations by hand after `new`.
@@ -205,13 +201,13 @@ Telnyx webhook URL, blog DNS all key off it). What bit us, in order of surprise:
   re-pinned it to 0.959.
 - **Custom domains do NOT survive a recreate either.** kgl-thoughts'
   `lundstedt.us` / `www.lundstedt.us` had to be re-added with `exe.dev domain
-  add kgl-thoughts <domain>` after `new`; Cloudflare DNS must stay DNS-only
+add kgl-thoughts <domain>` after `new`; Cloudflare DNS must stay DNS-only
   (grey cloud) pointing at `<name>.exe.xyz`. Same recreate-invalidates-a-held-
   binding class as `vm:` integrations.
-- **A recreate silently drops the VM from AgentsView aggregation.** Re-provision
-  mints a *new* per-host source token, which orphans the token the klundstedt-mini
+- **A recreate silently drops the VM from AgentsView aggregation.** _Resolved in 3.0.23: the collector reconciles its fan-in from the `av-src-*` integration list daily, and a recreated VM keeps its integration._ Re-provision
+  mints a _new_ per-host source token, which orphans the token the klundstedt-mini
   aggregator holds in `~/.agentsview/config.toml`; it then polls that host `401
-  Unauthorized` forever with no alert (telnyx-vm and kgl-thoughts had both gone
+Unauthorized` forever with no alert (telnyx-vm and kgl-thoughts had both gone
   dark this way, and kgl-songs/iv-provision were never in the list at all).
   After a recreate, copy the host's current `~/.config/agentsview/source.env`
   token into the aggregator's config and restart it. Move the token VM->config
@@ -266,81 +262,83 @@ Telnyx webhook URL, blog DNS all key off it). What bit us, in order of surprise:
       below, and `tailnet.md`). Rationale kept for the record:
 
       Decided 2026-08-19: a **dedicated** tag rather than reusing `tag:iv`.
-      `iv` already means "gets the MCP integrations"; adding key-minting to it
-      would make one tag mean two unrelated things, the second far stronger —
-      the same widening `auto:all` was rejected for, but disguised as reuse.
-      `auto:all` stays rejected outright: it would cover every future VM,
-      including sandboxes running untrusted code.
+          `iv` already means "gets the MCP integrations"; adding key-minting to it
+          would make one tag mean two unrelated things, the second far stronger —
+          the same widening `auto:all` was rejected for, but disguised as reuse.
+          `auto:all` stays rejected outright: it would cover every future VM,
+          including sandboxes running untrusted code.
 
-      Why it is worth doing: a recreated VM currently cannot rejoin unattended,
-      and cannot be fixed from another VM — it is not on the tailnet yet, and
-      `*.exe.xyz` needs an exe.dev SSH key no VM holds, so the bootstrap is
-      breakable only from a workstation.
+          Why it is worth doing: a recreated VM currently cannot rejoin unattended,
+          and cannot be fixed from another VM — it is not on the tailnet yet, and
+          `*.exe.xyz` needs an exe.dev SSH key no VM holds, so the bootstrap is
+          breakable only from a workstation.
 
-      Note `tailnet` is an **exe.dev** tag, unrelated to Tailscale's `tag:dev`.
-      Tailscale's side needs no fleet decision — `provision-iv.sh` hardcodes
-      `"tags":["tag:dev"]` into every join key, so any VM this repo joins is
-      tagged by construction; only a node joined by some other path can miss it,
-      as `iv-entire-agent-shelley` did.
+          Note `tailnet` is an **exe.dev** tag, unrelated to Tailscale's `tag:dev`.
+          Tailscale's side needs no fleet decision — `provision-iv.sh` hardcodes
+          `"tags":["tag:dev"]` into every join key, so any VM this repo joins is
+          tagged by construction; only a node joined by some other path can miss it,
+          as `iv-entire-agent-shelley` did.
+
 - [ ] Consolidate `tag:iv` and `mcp-agent`, which overlap — both effectively
       mean "an IV fleet VM that gets the MCP integrations", and the fleet is
       split across them (`iv-provision` has `iv`; most others have `mcp-agent`).
-      Deliberately *not* bundled with the `tailnet` tag work above: pairing a
+      Deliberately _not_ bundled with the `tailnet` tag work above: pairing a
       rename-and-retag with a security-relevant grant is how one of the two ends
       up unreviewed.
 - [x] ~~Narrow the tailnet credential.~~ Done 2026-08-19: `auth_keys` on
       `tag:dev` only, `devices:core` dropped, old client revoked. Verified after
       the swap — join path mints preauthorized `tag:dev` keys (200), everything
       else 403. A broker proved unnecessary; Tailscale's scopes covered it. What
-      a broker would still add is a *per-VM* bound, which the scope model cannot
+      a broker would still add is a _per-VM_ bound, which the scope model cannot
       express since every tagged VM shares one credential — revisit only if that
       specific property is wanted.
 - [ ] Establish that control-plane facts are checked **off-VM**. Three
       consecutive corrections to `tailnet.md`'s tag section were the same
       mistake: reasoning about exe.dev attachment from inside a VM.
       `reflection.int.exe.xyz` reports a VM's own tags and its own integrations,
-      never the attachment *rules*, so from a VM there is no way to tell whether
+      never the attachment _rules_, so from a VM there is no way to tell whether
       an integration arrived by `vm:`, `tag:`, or `auto:all` — effects are
       visible, rules are not. `ssh exe.dev integrations` is the authority.
 
       **The gap is closable, and "a VM cannot reach the control plane" was too
-      strong a claim.** What a VM lacks is an *SSH key* in the exe.dev account —
-      but exe.dev also exposes the same CLI over HTTPS at `POST https://exe.dev/exec`,
-      authenticated by a bearer token, and that endpoint is reachable from here
-      (it answers 401, not a connection failure). A scoped, expiring token would
-      let the authoring host verify attachment rules for itself instead of
-      routing every such question through the owner.
+          strong a claim.** What a VM lacks is an *SSH key* in the exe.dev account —
+          but exe.dev also exposes the same CLI over HTTPS at `POST https://exe.dev/exec`,
+          authenticated by a bearer token, and that endpoint is reachable from here
+          (it answers 401, not a connection failure). A scoped, expiring token would
+          let the authoring host verify attachment rules for itself instead of
+          routing every such question through the owner.
 
-      **It is one command, run from a workstation** (`--cmds` is the allow-list,
-      `--label` creates a separately revocable SSH key behind the token):
+          **It is one command, run from a workstation** (`--cmds` is the allow-list,
+          `--label` creates a separately revocable SSH key behind the token):
 
-      ```bash
-      ssh exe.dev ssh-key generate-api-key \
-        --label=iv-provision-ro --cmds=integrations,ls,tags --exp=30d
-      ```
+          ```bash
+          ssh exe.dev ssh-key generate-api-key \
+            --label=iv-provision-ro --cmds=integrations,ls,tags --exp=30d
+          ```
 
-      Then, on this VM, with the token in a `0600` file outside the repo:
+          Then, on this VM, with the token in a `0600` file outside the repo:
 
-      ```bash
-      curl -X POST https://exe.dev/exec \
-        -H "Authorization: Bearer $(cat ~/.config/exe/api-token)" -d 'integrations'
-      ```
+          ```bash
+          curl -X POST https://exe.dev/exec \
+            -H "Authorization: Bearer $(cat ~/.config/exe/api-token)" -d 'integrations'
+          ```
 
-      Three properties make this a bounded grant rather than an open one.
-      `cmds` is an allow-list of *command names*, and subcommands must be listed
-      explicitly — granting `integrations` does not grant `integrations attach`,
-      so the token literally cannot attach, detach, create or delete. `exp`
-      bounds replay. And `--label` mints a dedicated SSH key, so revoking is
-      removing that one key, with normal SSH access unaffected.
+          Three properties make this a bounded grant rather than an open one.
+          `cmds` is an allow-list of *command names*, and subcommands must be listed
+          explicitly — granting `integrations` does not grant `integrations attach`,
+          so the token literally cannot attach, detach, create or delete. `exp`
+          bounds replay. And `--label` mints a dedicated SSH key, so revoking is
+          removing that one key, with normal SSH access unaffected.
 
-      Still a real credential on a VM, which is exactly what the integration
-      model exists to avoid — so it is the owner's call, not an assumption. The
-      argument for it is that three documentation errors in one evening all came
-      from *inferring* control-plane state that a one-line query would have
-      settled.
+          Still a real credential on a VM, which is exactly what the integration
+          model exists to avoid — so it is the owner's call, not an assumption. The
+          argument for it is that three documentation errors in one evening all came
+          from *inferring* control-plane state that a one-line query would have
+          settled.
 
-      Until then, any claim in these docs about *how* something is attached needs
-      an owner-side check before it is written down.
+          Until then, any claim in these docs about *how* something is attached needs
+          an owner-side check before it is written down.
+
 - [ ] Re-attaching `repo-iv-provision-rw` to a second VM should be an event, not
       a state. On 2026-08-19 it was attached to `iv-foundry-stage2` as an
       expedient, a dozen commits were pushed from there, and it was detached the
@@ -349,7 +347,7 @@ Telnyx webhook URL, blog DNS all key off it). What bit us, in order of surprise:
       there is no mechanical enforcement beyond the attachment itself, so this
       stays a thing to notice rather than a thing that is guaranteed.
 - [ ] `api-tailscale` is currently attached to nothing, which is the intended
-      steady state (attach → join → detach). Note that a *joined* VM stays joined
+      steady state (attach → join → detach). Note that a _joined_ VM stays joined
       after detachment — verified on `iv-provision` 2026-08-19, which has been
       routing all fleet SSH with the integration detached. Nothing to do; recorded
       so the next person does not "fix" the absence.

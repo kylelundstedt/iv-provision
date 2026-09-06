@@ -1,5 +1,5 @@
 [Unit]
-Description=AgentsView authenticated tailnet source daemon
+Description=AgentsView source daemon (loopback, behind the exe.dev auth proxy)
 After=network-online.target
 Wants=network-online.target
 ConditionPathExists=%h/.config/agentsview/source.env
