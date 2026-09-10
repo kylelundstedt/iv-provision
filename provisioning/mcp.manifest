@@ -8,7 +8,12 @@
 #           OAuth endpoint); `-` = not registered on VMs
 #   mac     macOS registration: a direct URL (OAuth servers), or
 #           `pat:<1p-account>:<op-ref>` = https://api.githubcopilot.com/mcp/
-#           with a Bearer PAT read from 1Password at install time
+#           with a Bearer PAT read from 1Password at install time, or
+#           `codex:<url>` = registered in Codex ONLY. Claude Code gets the same
+#           services as claude.ai connectors, so a local OAuth row there is a
+#           duplicate that sits at "Needs authentication" forever (2026-09-10
+#           Mac audits); install.sh removes such a row from Claude Code if
+#           present. Codex has no connectors, so it keeps them.
 #
 # Layers:
 #   team      seeded on VMs by iv-image (agent/setup-mcp.sh, at a pinned
@@ -31,8 +36,8 @@
 # the server there — do not restore the vm-url column, which would put work-org
 # GitHub API access back on every VM.
 
-motherduck | team | https://mcp-motherduck.int.exe.xyz/mcp | https://api.motherduck.com/mcp
+motherduck | team | https://mcp-motherduck.int.exe.xyz/mcp | codex:https://api.motherduck.com/mcp
 github-work | team | - | pat:industryvault.1password.com:op://Employee/GitHub PAT IV/token
 github-home | personal | https://mcp-github-home.int.exe.xyz/mcp/ | pat:lundstedts.1password.com:op://Private/GitHub PAT Home/token
-tigris | personal | https://mcp.storage.dev/mcp | https://mcp.storage.dev/mcp
-readwise | personal | https://mcp2.readwise.io/mcp | https://mcp2.readwise.io/mcp
+tigris | personal | https://mcp.storage.dev/mcp | codex:https://mcp.storage.dev/mcp
+readwise | personal | https://mcp2.readwise.io/mcp | codex:https://mcp2.readwise.io/mcp
