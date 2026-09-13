@@ -82,7 +82,7 @@ done < "$HOME/.agents/iv-team-skills.list"
 # is LISTED got installed, so it passes vacuously if skills-local/ stops being
 # copied at all -- which is precisely the regression to catch, since these are
 # the skills that are not recoverable from the manifest.
-for name in join-tailnet upgrade-vm create-vm create-repo; do
+for name in join-tailnet upgrade-vm create-vm create-repo agentsview-query; do
   test -f "$HOME/.agents/skills/$name/SKILL.md"
   grep -qx "$name" "$HOME/.agents/iv-team-skills.list"
 done
@@ -93,6 +93,7 @@ done
 for s in gh-mcp.sh push-tree.sh; do
   test -x "$HOME/.agents/skills/create-repo/$s"
 done
+test -x "$HOME/.agents/skills/agentsview-query/agentsview-mcp.sh"
 
 test -f "$lock"
 grep -qx "duckdb_version=$actual_duckdb" "$lock"

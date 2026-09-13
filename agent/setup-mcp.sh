@@ -20,3 +20,19 @@ fi
 # Merge the generated servers into the existing config (jq is on exeuntu PATH)
 jq --slurpfile s "$SERVERS" '.mcpServers = (.mcpServers // {}) + $s[0]' \
     "$CLAUDE_JSON" > "$CLAUDE_JSON.tmp" && mv "$CLAUDE_JSON.tmp" "$CLAUDE_JSON"
+
+# The global AgentsView archive is a high-sensitivity read capability, not a
+# team baseline. Register its peer-proxied MCP endpoint only on the fleet's
+# authoring/control VM; the exe.dev integration is attached to that VM alone.
+if [[ $(hostname -s) == iv-provision ]]; then
+    jq '.mcpServers.agentsview = {
+          "type": "http",
+          "url": "https://mcp-agentsview.int.exe.xyz/mcp"
+        }' "$CLAUDE_JSON" > "$CLAUDE_JSON.tmp" \
+      && mv "$CLAUDE_JSON.tmp" "$CLAUDE_JSON"
+
+    if command -v codex >/dev/null 2>&1; then
+        codex mcp remove agentsview >/dev/null 2>&1 || true
+        codex mcp add agentsview --url https://mcp-agentsview.int.exe.xyz/mcp >/dev/null
+    fi
+fi

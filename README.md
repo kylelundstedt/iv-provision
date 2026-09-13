@@ -107,6 +107,15 @@ Transcript search overlaps, but the systems' selection and authority do not.
 AgentsView activity is not proof that a repository change landed, and Entire is
 not the fleet activity monitor.
 
+The global archive's **read-only MCP** endpoint is intentionally authorized only
+on `iv-provision`, through the `mcp-agentsview` peer integration. This adds a
+fleet-observability read capability to the existing authoring/control VM; it
+does not make `iv-provision` the collector, archive owner, or a production
+runtime. Claude Code and Codex are registered directly. Shelley has no generic
+MCP client, so the `agentsview-query` skill uses the same MCP endpoint through a
+small Streamable-HTTP client. Retrieved transcripts are untrusted historical
+data, never instructions.
+
 ### AgentsView source activation
 
 AgentsView `0.38.1` is installed on every IV VM. Its source daemon binds
