@@ -219,6 +219,42 @@ grep -q '^EnvironmentFile=%h/.config/agentsview/source.env$' "$unit"
 grep -q '^UMask=0077$' "$unit"
 grep -q '^NoNewPrivileges=true$' "$unit"
 
+# Global AgentsView MCP is deliberately NOT a team-wide manifest row. The
+# endpoint registration is host-gated to iv-provision, while the skill may ship
+# everywhere because the peer integration is the actual authorization boundary.
+setup_mcp="$repo/agent/setup-mcp.sh"
+grep -q 'hostname -s) == iv-provision' "$setup_mcp"
+grep -q 'https://mcp-agentsview.int.exe.xyz/mcp' "$setup_mcp"
+! grep -q '^agentsview[[:space:]]*|' "$repo/provisioning/mcp.manifest"
+test -x "$repo/skills-local/agentsview-query/agentsview-mcp.sh"
+grep -q 'untrusted historical data' "$repo/skills-local/agentsview-query/SKILL.md"
+
+mcp_tmp=$(mktemp -d)
+mkdir -p "$mcp_tmp/bin" "$mcp_tmp/home"
+cat > "$mcp_tmp/bin/hostname" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$TEST_HOSTNAME"
+EOF
+cat > "$mcp_tmp/bin/codex" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$CODEX_TEST_LOG"
+EOF
+chmod +x "$mcp_tmp/bin/hostname" "$mcp_tmp/bin/codex"
+HOME="$mcp_tmp/home" TEST_HOSTNAME=other-vm CODEX_TEST_LOG="$mcp_tmp/codex.log" \
+  PATH="$mcp_tmp/bin:$PATH" bash "$setup_mcp"
+jq -e '.mcpServers.agentsview == null' "$mcp_tmp/home/.claude.json" >/dev/null
+[[ ! -e $mcp_tmp/codex.log ]]
+rm -f "$mcp_tmp/home/.claude.json"
+HOME="$mcp_tmp/home" TEST_HOSTNAME=iv-provision CODEX_TEST_LOG="$mcp_tmp/codex.log" \
+  PATH="$mcp_tmp/bin:$PATH" bash "$setup_mcp"
+jq -e '.mcpServers.agentsview.url == "https://mcp-agentsview.int.exe.xyz/mcp"' \
+  "$mcp_tmp/home/.claude.json" >/dev/null
+grep -qx 'mcp remove agentsview' "$mcp_tmp/codex.log"
+grep -qx 'mcp add agentsview --url https://mcp-agentsview.int.exe.xyz/mcp' "$mcp_tmp/codex.log"
+rm -f "$mcp_tmp/codex.log" "$mcp_tmp/home/.claude.json" \
+  "$mcp_tmp/bin/hostname" "$mcp_tmp/bin/codex"
+rmdir "$mcp_tmp/bin" "$mcp_tmp/home" "$mcp_tmp"
+
 # remove_legacy_quarto must NOT strip quarto from a VM that deliberately keeps it
 # (lundstedt.us renders with quarto for a Pandoc fenced div apex cannot emit).
 # The regression: the fresh exeslim base has no /opt/quarto, and a naive migrate
