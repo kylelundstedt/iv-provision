@@ -105,16 +105,39 @@ if EXE_JSON=$(curl -sS --max-time 30 -X POST "$EXE_API/exec" -d 'ls --json' 2>/d
     :
 else
     EXE_JSON=""
+    # Keep ssh's stderr. Discarding it (2>/dev/null) made every failure report
+    # the same uninformative "integration and ssh both failed", which hid a
+    # mundane and fixable cause for three weeks on klundstedt-mini: the exe.dev
+    # key is served by the 1Password SSH agent, 1Password auto-locks after 60
+    # minutes (security.autolock.minutes), and an unattended run therefore finds
+    # no usable identity. With BatchMode=yes there is no fallback, so both paths
+    # fail and the check fails closed -- correctly, but silently as to why.
+    SSH_ERR=""
     for attempt in 1 2; do
-        EXE_JSON=$(ssh -o ConnectTimeout=25 -o BatchMode=yes exe.dev ls --json 2>/dev/null) && [[ -n "$EXE_JSON" ]] && break
+        ssh_stderr=$(mktemp -t entire-push-ssh) || ssh_stderr=/dev/null
+        EXE_JSON=$(ssh -o ConnectTimeout=25 -o BatchMode=yes exe.dev ls --json 2>"$ssh_stderr") \
+            && [[ -n "$EXE_JSON" ]] && { rm -f "$ssh_stderr"; break; }
         EXE_JSON=""
+        SSH_ERR=$(tr '\n' ' ' < "$ssh_stderr" 2>/dev/null | sed 's/  */ /g;s/ *$//')
+        rm -f "$ssh_stderr"
         [[ $attempt -eq 1 ]] && sleep 45
     done
 fi
 # FAIL CLOSED. An inventory we cannot read is treated like a tailnet we cannot
 # read: a check that silently narrows its scope is the failure mode this exists
 # to prevent.
-[[ -n "$EXE_JSON" ]] || fail "exe.dev inventory unavailable (integration and ssh both failed)"
+if [[ -z "$EXE_JSON" ]]; then
+    # Name the likely cause where the signature is unambiguous, so the alert is
+    # actionable rather than a starting point for an investigation.
+    hint=""
+    case "$SSH_ERR" in
+        *"Permission denied"*|*"No such identity"*|*"agent refused"*|*"Too many authentication failures"*)
+            hint=" — ssh could not authenticate; if this host serves the exe.dev key from the 1Password agent, it is probably locked (auto-lock is 60m by default)" ;;
+        *"Connection timed out"*|*"Operation timed out"*|*"Connection refused"*)
+            hint=" — ssh could not connect; exe.dev drops SYNs past an undocumented per-IP rate" ;;
+    esac
+    fail "exe.dev inventory unavailable (integration and ssh both failed)${hint}${SSH_ERR:+ [ssh: $SSH_ERR]}"
+fi
 
 EXEVMS=()
 while IFS= read -r h; do [[ -n "$h" ]] && EXEVMS+=("$h"); done < <(
