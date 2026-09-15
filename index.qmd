@@ -2,144 +2,77 @@
 title: "iv-provision"
 ---
 
+You are reading this on **`iv-provision`**, the IV **control-plane host**. That
+is a broader job than the name suggests, and this page exists to say so — the
+name describes one use of the host's capability rather than the capability
+itself.
+
+## What this host does
+
+Its defining property is **control-plane access to exe.dev**: it reaches the
+control plane through an http-proxy integration, so it needs no exe.dev SSH key
+of its own. Everything below follows from that.
+
+| Role | What runs |
+| ---- | --------- |
+| **Fleet control plane** | Create VMs (`create-vm`), list them, create and attach integrations, mint scoped tokens. The `create-repo` counterpart makes GitHub repos with no laptop and no `gh` login. |
+| **Scheduled fleet checks** | `entire-push-check.timer` (daily) — asserts no repo on any fleet host holds an Entire checkpoint that exists on no remote. Moved here from the mini on 2026-09-15; see below. |
+| **This doc site** | nginx serves a published release of this repo on `:8000` behind the VM's exe.dev auth proxy. Re-render with `provision-docsite <repo>`, never bare `render-site` — the live site is a symlinked release, so a failed render cannot break it. |
+
+### Why the checks live here and not on a workstation
+
+`entire-push-check` ran on the mini and failed **every scheduled run**. Host
+discovery needs the exe.dev inventory; off-VM that means
+`ssh exe.dev ls --json`, and the mini's exe.dev key is served by the 1Password
+agent, which auto-locks after 60 minutes. A headless always-on host is locked at
+nearly any scheduled moment, `BatchMode=yes` leaves no fallback, and the
+integration URL is unroutable off-VM — so both inventory paths failed and the
+check failed closed. It looked intermittent only because every success in its
+history was an interactive run.
+
+Here the integration supplies the inventory with no key to unlock, so the
+dependency is **eliminated rather than worked around**. The general rule, with
+the worked cases, is in dotfiles `agent_docs/service-placement.md`: *a probe runs
+where its inputs already are; alerting stays off-box.* The healthchecks.io check
+deliberately did not move — a dead-man's switch must not share fate with the host
+it watches.
+
+One cost, stated rather than hidden: this host has no exe.dev SSH key, so fleet
+hosts that never joined the tailnet are unreachable from it and are reported as
+`unreachable — not inspected`.
+
+## What this repo is
+
 The IV provisioning layer for exe.dev VMs: a script (`provision-iv.sh`) plus
-vendored skills and doc-site tooling that turn a stock exe.dev VM into an IV
-dev box.
+vendored skills and doc-site tooling that turn a stock exe.dev VM into an IV dev
+box.
 
-## Why a script, not a custom image
+| File | Role |
+| ---- | ---- |
+| `provision-iv.sh` | Provisions the IV layer onto the IV base image; writes `~/iv-provision.lock`. |
+| `bin/` | `render-site`, `provision-docsite`, `gen-llms-txt`, `entire-push-check` — installed onto PATH. |
+| `skills/` | Vendored, pinned team skills — committed so they are frozen. |
+| `provisioning/` | Manifests and exclusion lists the fleet checks read. |
 
-**Corrected 2026-08-18.** This page used to claim that a custom Docker image
-"silently disables Shelley" and that pinning a custom registry digest "is
-exactly what breaks Shelley". That is false, it was retracted in `README.md` on
-2026-07-28, and it blocked the slim-base work for months while remaining live on
-this — the most-read — page. exe.dev ships an opt-in label
-(`ssh exe.dev doc customization`):
+## Where to go next
 
-> `LABEL exe.dev/install-shelley=true` makes exe.dev automatically install a
-> recent Shelley in `/usr/local/bin` on creation and makes the UI assume that
-> Shelley is installed.
+| Page | Read it for |
+| ---- | ----------- |
+| [Design](design.md) | Why a script and not a custom image; layout; what "pinned" means (recipe pinning, base-image build IDs, tag caching). |
+| [Bootstrap](bootstrap.md) | Standing up a new VM from nothing. |
+| [Maintaining](building.md) | Changing the provisioner and cutting a release. |
+| [Consuming](consuming.md) | Using the layer from another repo or host. |
+| [Tailnet Join](tailnet.md) | Joining a VM to the tailnet, the two tag systems, and the credential boundary. |
+| [Registry](registry.md) | The image registry and how VMs pull from it. |
+| [Retiring a VM](retiring.md) | Deliberately a runbook — deletion is the one fleet operation where a mistake is unrecoverable. |
+| [Releases](releases.md) | Version history of the provisioning recipe. |
 
-A custom image loses Shelley only **by default**. IV VMs now in fact run a
-custom image — `ghcr.io/kylelundstedt/exeslim-dev`, which sets that label,
-supplies its own `shelley.socket`/`shelley.service`, and keeps Shelley fully
-working. What remains true is that a custom image is not recognised as
-"exeuntu", so anything keying off that (`EXEUNTU=1`) is absent.
-
-The durable reasons this stays a script:
-
-- **Version bumps must not require a fleet recreate.** exe.dev fixes a VM's
-  image at creation and offers no way to move a live VM onto a newer one
-  (`new`, `rm`, `restart`, `cp`, `resize` — `cp` clones the disk you already
-  have). Every bump in the pinned tool list at the top of `provision-iv.sh`
-  would become a fleet recreate, whereas today it is a re-run in place
-  (`upgrade-vm` Path A, ~23 seconds).
-- **Baking buys nothing on disk.** exe.dev bills each VM's own ext4 usage with
-  no cross-VM dedup (`ssh exe.dev doc faq/disk-usage`), so moving a binary from
-  `~/.local` into an image layer relocates bytes rather than removing them. It
-  also goes stale: 2.0 GB of shadowed, superseded duplicates were measured
-  fleet-wide on 2026-07-28 from tools baked into a base image.
-- **Preinstall.** Provisioning installs DuckDB, Apex, doc-site tooling, agent
-  config, and team skills in one pass. Apex handles both document-level
-  Markdown and multi-page documentation sites.
-- **Reproducible compute for GitLake.** The custom image's only real advantage
-  was reproducibility via pinned image digests; that is replaced by the
-  recipe-pinning model below (git tag/sha + pinned tools + vendored skills,
-  with the base image recorded in a lockfile).
-
-The disk win comes from the **base**, not from baking: exeuntu is ~4 GB and
-`exeslim` is ~175 MB. The base carries OS packages; this script carries the
-volatile, version-pinned tools.
-
-## Layout
-
-| File               | Role                                                                   |
-| ------------------ | ---------------------------------------------------------------------- |
-| `provision-iv.sh`  | Provisions the IV layer onto the IV base image (tailscale, agents, Entire, DuckDB, Apex, agent config, skills); writes `~/iv-provision.lock`. |
-| `vendor-skills.sh` | Refreshes the vendored skills snapshot in `skills/` (needs node/npx).   |
-| `skills/`          | Vendored, pinned team skills — committed to the repo so they are frozen. |
-| `bin/`             | `render-site` + `provision-docsite` + `gen-llms-txt` — installed onto PATH. |
-
-## Reproducibility (recipe pinning)
-
-The pinned artifact is the git commit of this repo: check out a specific tag/sha
-on the VM, run `provision-iv.sh`, and you get the same result.
-
-- Tool release versions and per-architecture checksums are pinned inside
-  `provision-iv.sh`; re-running it repairs or upgrades mismatched versions.
-- Skills are vendored into `skills/` (committed = frozen); `provision-iv.sh`
-  copies them in with no node/npx needed on the VM.
-- The base image **is** pinnable, contrary to what this page said before
-  2026-08-18: `ssh exe.dev new --image=ghcr.io/kylelundstedt/exeslim-dev:<build-id>`
-  selects an immutable build. Stock `exeuntu` is the unpinnable case — exe.dev
-  manages it (floating) with no version/digest selector. Either way,
-  `provision-iv.sh` records what it landed on in `~/iv-provision.lock` (base
-  image revision, Shelley version, installed DuckDB/Apex/AWS/Tigris/rclone/herdr
-  versions, skills count, manifest pin, and provisioning Git SHA).
-- Prefer the immutable `<date>.<run>.<attempt>` build ID for a fleet VM. The tag
-  is read once, at `new`, and never re-pulled, so it is not a pin that keeps
-  applying — it only decides which build the VM starts from. What makes the
-  immutable ID worth using anyway is that exe.dev caches mutable tags: 1 hour for
-  `latest`/`main`/`master` and **24 hours for everything else**, so the tags that
-  look most specific (`:<date>`, `:<sha>`) are cached longest and a mutable
-  `:<date>` can serve yesterday's image for a full day. See "Picking a tag" in
-  the [`exeslim` README](https://github.com/kylelundstedt/exeslim).
-
-## Versioning
-
-Versioning is via **Git tags of this provisioning repo**, not
-`iv-image:MAJOR.MINOR.PATCH` Docker image tags. Pin a recipe by checking out a
-tag/sha before running `provision-iv.sh`.
-
-### Provisioning-era releases
-
-| Version | Change |
-| ------- | ------ |
-| `3.0.23` | **AgentsView over exe.dev peer integrations.** The source daemon binds loopback behind the VM's own exe.dev auth proxy instead of the tailnet, and the sync token becomes a public fleet constant (`AGENTSVIEW_FLEET_TOKEN`): the peer integration is the access control, the token only satisfies AgentsView's handshake. `create-vm` now enrolls the VM it makes by creating its `av-src-<name>` peer integration (its token widened to `integrations add`), and the collector on `iv-agentsview` reconciles its fan-in from that list daily -- closing the gap that left three VMs created 2026-08-29..09-03 uncollected after the manual step was retired. `retiring.md` step 2 is now one lobby command. Canary and design: dotfiles `agent_docs/agentsview-peer-path.md`. |
-| `3.0.22` | Vendors **Tailscale's own agent skill** (`tailscale/tailscale-skill`, alpha) as a team row. The tailnet is a provisioning concern here -- every VM joins in `provision-iv.sh` -- and the failures are Tailscale-shaped: on 2026-08-23 a `tag:dev` mint failed with `requested tags [tag:dev] are invalid or not permitted` and the OAuth scope was re-verified twice before the answer turned out to be tag *ownership*. Nothing on the VM carried that material. Deliberately **not** Tailscale's remote MCP server (`tailscale.mcp.kapa.ai`): probed, it is doc search behind per-client browser OAuth, so it would be the fleet's first MCP server needing a human at a browser per VM -- against the property every `mcp.manifest` row has, that the credential lives at the exe.dev edge and a recreated VM works unattended. The skill teaches upstream's `tailscale up --auth-key=<console key>` join, which is what `tailnet.md` exists to prevent, so both `tailnet.md` and `join-tailnet` now record the boundary and which file wins. Also backfills the `3.0.20` and `3.0.21` rows this table never got. |
-| `3.0.21` | Docs-only. Carries the `api-exe-new` scope table correction from #45 into a tag: the fleet reads skills from a detached checkout, so a correction on `main` is invisible until a release names it, and a VM created at `3.0.20` still shipped the stale table. Bumps `create-vm`'s four self-pins on the release branch so tag and pin are the same commit. |
-| `3.0.20` | `create-vm` pins the base image carrying the **`.bashrc` PATH fix** (`exeslim-dev` `2026-08-28.24.1`). Upstream appended the `~/.local/bin` export below Ubuntu skel's `case $- in *i*) ;; *) return;; esac`, making it dead code for every non-interactive shell -- so `ssh <vm> '<cmd>'` could not find `python3` on a VM where it was installed and worked interactively. Verified in the image bytes, not assumed: both builds pulled and the failing case run against each. The bug hid for months because the older base shipped zsh, whose `.zshenv` is read on every invocation. |
-| `3.0.19` | `create-vm` pins **itself**. `3.0.17` and `3.0.18` were each tagged *before* the pin bump that followed them, so a VM created at either tag provisioned one release behind the tag it was created from — a skill telling you to pin, at a pin that is stale by construction. Fixed by bumping the pin and cutting the tag on the same commit, which is what the pin has to mean if "always pin the tag" is to hold. No provisioning change. |
-| `3.0.18` | **`create-repo`**: create a GitHub repo and seed it with files from a VM, with no laptop, no `gh` login and no token — the counterpart to `create-vm`, through the `mcp-github-home` integration whose credential stays at the exe.dev edge. Ships two executables beside the prose (`gh-mcp.sh`, `push-tree.sh`) because streamable-HTTP MCP is three round trips and returns its session id in a header. The trap it exists to document: a repo created this way has **no `repo-*` integration**, so `git clone` of a new private repo answers `Repository not found` and a push to a new public one is `integration is read-only` — neither is a broken repo, and the MCP path is the write path until the owner mints the integration. Records the two hard limits found by probing: there is no delete-repository tool at all, and org repos are refused by SAML SSO. Smoke now asserts the scripts arrive executable, which `cp -a` preserves only if the mode was committed. |
-| `3.0.17` | Smoke: check the `aws` pin where it actually lives. |
-| `3.0.16` | Doc-only: base recreate playbook and migration progress in `TODO.md`. |
-| `3.0.15` | **Entire CLI `0.8.42` → `0.10.1`** (checksum-verified), after re-qualifying plugin `entire-agent-shelley` `0.1.3` against it on the dedicated `iv-entire-agent-shelley` VM — the full live suite (`test-shelley-live.sh`, including real checkpoint condensation and the `entire/checkpoints/v1` ref) passed; `0.10.0` passed identically, so the newer stable was pinned. The jump skips `0.9.x`, which is why re-qualification rather than a bare version edit was the gate; the plugin is unchanged. Also doc-only: the tailnet credential **has been narrowed** to `auth_keys` on `tag:dev` (2026-08-19), so `tailnet.md` records deployed state rather than a proposal — a tagged VM can join or rejoin unattended and can do nothing else (enumerating the tailnet, reading or deleting any node, the policy file and DNS all return 403, verified after the change). Adds the console procedure that matches the UI (a Read/Write grid under **Keys → Auth Keys**, not the API-doc scope names), where the credential goes in exe.dev (`api-tailscale` → Authentication → basic auth), and why the old client is revoked last: whether `preauthorized: true` falls inside Auth Keys Write is undocumented — it does. |
-| `3.0.14` | Warn instead of failing silently when the tailnet credential cannot list devices. Stale-node cleanup — the only part of provisioning needing `devices:core` rather than just `auth_keys` — would otherwise 403, yield nothing, skip its loop, and let the VM join as `<hostname>-1` with no message anywhere. Documents how to narrow the grant **without** building a broker: Tailscale's OAuth scopes already bind key-minting to named tags (minting `tag:iv-aperture-admin` is refused) and already deny the policy file and DNS, so dropping `devices:core` is a console change rather than a service to operate — with the `-1` collision as its stated cost. |
-| `3.0.13` | Doc-only. `api-tailscale` now attaches through a dedicated **`tailnet`** exe.dev tag rather than per VM, so a recreated VM rejoins unattended instead of being inert until a human attaches the integration — a hole that could only be closed from a workstation, since a VM off the tailnet is unreachable from other VMs. Deliberately *not* `tag:iv`: that tag already carries the MCP integrations, and folding key-minting into it would be the same widening `auto:all` was rejected for, disguised as reuse. A tag named for the capability also reads correctly at the moment someone applies it. |
-| `3.0.12` | Doc-only. Corrects `3.0.11`'s claim that the exe.dev tag `iv` was "unused for attachment" — it already carries `api-motherduck-mcp` and `api-github-copilot-home`, which makes the `tag:iv` proposal one more attachment onto a working mechanism rather than a new pattern. The claim was inferred from inside a VM, where `reflection` reports a VM's own tags and integrations but never the attachment *rules*; effects are visible there, rules are not. Records the resulting standing rule: control-plane facts are confirmed off-VM via `ssh exe.dev integrations`. |
-| `3.0.11` | Doc-only. Tell the **two tag systems** apart: Tailscale tags (`tag:dev`) govern reachability and the SSH policy; exe.dev VM tags (`iv`, `mcp-agent`) govern which integrations attach. exe.dev's attach syntax borrows Tailscale's `tag:` prefix, which produced two successive errors in `tailnet.md` — the second while correcting the first — so the distinction is now a table. Settles that Tailscale `tag:dev` needs no fleet decision (`provision-iv.sh` hardcodes it into every join key) and records why `auto:all` is the wrong attachment for `api-tailscale`: it would cover every future VM, including sandboxes, discarding the consent signal the design rests on. Proposes `tag:iv` instead, so a recreated VM rejoins unattended. |
-| `3.0.10` | Doc-only. Ships the corrected "Authoring boundary" (single writer, restored 2026-08-19), the PR-from-a-VM procedure and the fork base-branch trap, and the refreshed `TODO.md` — all of which merged to `main` *after* `3.0.9` was tagged, so every fleet VM's checkout still showed the superseded "any host may author" text. A VM's `~/iv-provision` sits detached at a release tag, so documentation only reaches the fleet when a tag moves; a doc fix that is not tagged is a doc fix the fleet cannot read. |
-| `3.0.9` | CI: build a branch on `push` only for `main`, so a PR stops running the identical commit twice — the duplicate run for `969c66a` hung six hours in Shellcheck and failed the PR while the `pull_request` run for the same tree passed in sixteen seconds. Install shellcheck from a pinned, checksum-verified release instead of `apt-get update && apt-get install`, which was the step that hung and left the linter version floating; add `cancel-in-progress` concurrency and a 10-minute job timeout so a wedged run fails fast rather than at the 6-hour limit. Probe the `claude`/`codex` **floors** across every copy on `PATH`, not just `~/.local/bin`. The pre-exeslim `exe` base ships them in `/usr/local/bin`, where the probe could not see them, so the floor never applied and provisioning *downgraded* working agents (kgl-songs: Claude Code 2.1.222 → 2.1.220, Codex 0.146.1 → 0.146.0) while stranding ~290 MB of shadowed duplicate — the exact waste `install_claude_code` exists to avoid. Also key the generated ssh block on tailnet **membership** (`Match exec "tailscale ip -4 %h"`) instead of the `iv-*` name prefix, which never matched `kgl-songs`, `kgl-thoughts` or `telnyx-vm`; and reconcile that block on every provision rather than appending it once, so a wrong stanza can be corrected on VMs that already have one. |
-| `3.0.8` | Generate the per-host AgentsView token during provisioning instead of requiring a hand-invented one. It is a self-chosen random secret, so a human typing it added nothing but a manual step that blocked unattended bring-up. Minted once, never rotated (the collector stores it), still per host. |
-| `3.0.7` | Fix `local` used outside a function in the AgentsView `auth_token` block, which aborted provisioning on the first VM to have a `source.env`. `bash -n` accepts it; shellcheck (SC2168) does not, so it now runs in the tests and in CI over every shell file. |
-| `3.0.6` | Identify Shelley by systemd's `MainPID`, not by process name. `KillMode=process` lets terminal helpers outlive a restart, and they are named `shelley` too — so the 3.0.4 "is the override live?" check read a surviving helper's environment and restarted Shelley on **every** run, and the swap's wait-for-exit loop never broke. |
-| `3.0.5` | **Provisioning joins the tailnet again.** Moving the tailscale install into the provisioner without the join had silently replaced a one-command bring-up with a hand-run OAuth dance. The join is gated on the `api-tailscale` integration being attached — the attachment is the consent signal, so nothing is baked in and no credential reaches the VM. Also corrects the docs: there is no `iv` tag, and the integration is normally attached to nothing by design. |
-| `3.0.4` | Stop restarting Shelley on every re-provision. The no-change path restarted unconditionally to make the self-update drop-in take effect, killing every in-flight conversation on the VM — including, during a fleet refresh, the one driving it. Now restarts only when the override is not already live in the running process (`/proc/<pid>/environ`). |
-| `3.0.3` | Treat the `claude`/`codex` pins as **floors**: an exact match downgraded a self-updated agent (2.1.235 → 2.1.220) and would have done so on every VM in a fleet refresh. Announce the provisioning revision up front and warn when the checkout is behind its upstream or dirty — a stale local `main` had silently re-provisioned an older recipe. |
-| `3.0.2` | Install a uv-managed `python3`: without it `entire-agent-shelley` cannot run, so the ACR capture path was dead while Shelley's hooks still exited 0. Rebuild the smoke suite's long-line fixture in awk so a missing interpreter cannot abort the whole suite at line 42. Ship the `herdr` skill, which `.gitignore` had withheld from every VM despite `skills.manifest` asking for it. Prefer this over `3.0.1`. |
-| `3.0.1` | Merge `~/.claude/settings.json` instead of overwriting it, so a personal overlay's `SessionStart` hook survives provisioning; fix the Shelley socket-activation race for real (documented as fixed in a `2.9.1` that was never tagged) and health-check the *serving* version, not just the binary on disk; install Claude Code into its native versioned layout. |
-| `3.0.0` | **Renamed `iv-image` → `iv-provision`.** The provisioner now owns everything a fleet VM needs, ending the dependency on the personal dotfiles repo: `tailscale` (with `--ssh`; a fresh VM previously could not join the tailnet at all), `uv`, `claude`, `codex`, the Entire CLI + `entire-agent-shelley` plugin + vendored `entire-agent-agentsview` (ADR 0010's primary ACR capture path, which did not survive a recreate), and the `provisioning/` manifests (retiring `dotfiles-manifest.pin`). Fixes AgentsView's CLI, locked out by its own `--require-auth`, and rotates its unbounded debug log. (The socket race and settings-merge fixes landed in `3.0.1` — prefer it.) Documents the real base image (`ghcr.io/kylelundstedt/exeslim-dev`) and retracts the "custom images disable Shelley" claim. Skills refreshed. Breaking: new repo name, new clone URL, `exeuntu_image_revision` → `base_image_*` in the lock file. |
-| `2.9.1` | `install_shelley`: stop the socket before the service, closing the race where socket activation restarted the old binary and let it self-upgrade over the pin. |
-| `2.9.0` | Pin the subscription-capable `aifoundry-org/shelley` release and disable Shelley's unmanaged self-update; tests tolerate optional provisioned tools. |
-| `2.8.0` | `tigris` 3.1.0 → 3.6.1 (adds `TIGRIS_FORCE_PATH_STYLE`). |
-| `2.7.0` | + Apex Markdown 1.1.13 baked as the lightweight document/terminal renderer; Quarto remains the site publisher. |
-| `2.6.0` | + `herdr` baked (0.7.4, pinned; SHA-256s computed locally — upstream ships no checksums). |
-| `2.5.1` | upgrade-vm skill: mint Tailscale API access from the OAuth client instead of the revoked static API key (doc-only). |
-| `2.5.0` | First hardened provisioning release: vendored skills, verified tool downloads, repairable version pins, safer SSH/Tailscale workflows, tests/CI, nginx doc serving, and Markdown/LLM doc artifacts. |
-
-### History (custom-image era, retired)
-
-| Version | Change                                          | exeuntu commit |
-| ------- | ----------------------------------------------- | -------------- |
-| `1.0.0` | exeuntu base + DuckDB 1.5.3                      | `d20aa680543e` |
-| `1.1.0` | + `systemctl enable tailscaled` (BYO-image fix) | `d20aa680543e` |
-| `1.2.0` | + Quarto 1.9.38 (doc-site rendering)            | `d20aa680543e` |
-| `1.3.0` | + doc-site tooling (`render-site`, `provision-docsite`) | `d20aa680543e` |
-| `1.3.1` | fix `provision-docsite` for non-interactive SSH; registry to `:5000` | `d20aa680543e` |
-| `1.4.0` | + Tailscale bootstrap baked in (`ts-bootstrap`, `tailscaled` enabled) | `d20aa680543e` |
-| `1.5.0` | + `gen-llms-txt` (Quarto post-render hook: `.md` twins + `llms.txt`) | `d20aa680543e` |
-| `1.6.0` | harden `ts-bootstrap` proxy/auth-key retries | `d20aa680543e` |
-| `1.7.0` | fix stale-node race and retry auth-key POST | `d20aa680543e` |
-| `1.8.0` | replace setup-script bootstrap with image-owned `iv-tailscale-join.service` | `d20aa680543e` |
-| `2.0.0` | **remove baked auto-join** (`ts-bootstrap`/`iv-tailscale-join`/service); `tailscaled` enabled but idle, VMs join on demand via the `join-tailnet` skill (breaking) | `d20aa680543e` |
-| `2.1.0` | + baked team agent config (AGENTS.md, settings, MCP) + pre-installed team skills (fnm + node) | `d20aa680543e` |
-| `2.2.0` | + cloud/object-storage CLIs: `aws`, `tigris`, `rclone` baked; Azure CLI + gcloud SDK on demand via `install-cloud-cli` | `d20aa680543e` |
+::: {.callout-note}
+The **repo** keeps the name `iv-provision` regardless of the host's wider role, so
+the two are not fully separable by renaming. A host rename was considered on
+2026-09-15 and declined — a VM's tailnet node is not freed by rename,
+`tailscale set --hostname` does not rename a registered node, and a 2026-07-30
+rename left a VM off the tailnet when 1Password locked mid-operation. The
+reasoning is recorded in dotfiles `agent_docs/hosts.md`; this page is the cheaper
+fix.
+:::
