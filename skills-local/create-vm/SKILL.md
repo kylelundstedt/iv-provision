@@ -91,7 +91,7 @@ itself. Create and provision in **one call**. Copy this verbatim, substituting
 only the name and sizes:
 
 ```bash
-curl -s --max-time 300 -X POST https://api-exe-new.int.exe.xyz/exec -d "new --name=<name> --tag=tailnet --image=ghcr.io/kylelundstedt/exeslim-dev:2026-08-28.24.1 --cpu=2 --memory=8GB --disk=15GB --prompt='sudo systemd-run --unit=iv-provision --collect --property=Type=oneshot --property=TimeoutStartSec=3600 --uid=exedev --setenv=HOME=/home/exedev /bin/bash -lc \"git clone https://github.com/kylelundstedt/iv-provision.git ~/iv-provision && git -C ~/iv-provision checkout 3.0.25 && ~/iv-provision/provision-iv.sh\"'"
+curl -s --max-time 300 -X POST https://api-exe-new.int.exe.xyz/exec -d "new --name=<name> --tag=tailnet --image=ghcr.io/kylelundstedt/exeslim-dev:2026-09-15.29.1 --cpu=2 --memory=8GB --disk=15GB --prompt='sudo systemd-run --unit=iv-provision --collect --property=Type=oneshot --property=TimeoutStartSec=3600 --uid=exedev --setenv=HOME=/home/exedev /bin/bash -lc \"git clone https://github.com/kylelundstedt/iv-provision.git ~/iv-provision && git -C ~/iv-provision checkout 3.0.25 && ~/iv-provision/provision-iv.sh\"'"
 ```
 
 `--tag=tailnet` carries the `api-tailscale` integration, which is what lets
@@ -199,7 +199,7 @@ this one call made for it, or the same check keeps reporting it -- by design.
 systemd, TLS roots, curl. **No Shelley, no toolchain.** Image only:
 
 ```
-new --name=<name> --image=ghcr.io/kylelundstedt/exeslim:2026-08-28.24.1 --cpu=2 --memory=8GB --disk=15GB
+new --name=<name> --image=ghcr.io/kylelundstedt/exeslim:2026-09-15.29.1 --cpu=2 --memory=8GB --disk=15GB
 ```
 
 Do **not** add `--prompt`: `new --prompt` requires an image with Shelley, so it
@@ -231,11 +231,16 @@ it by deleting the node ([retiring.md](../../retiring.md) §5).
 
 | What                         | Value             |
 | ---------------------------- | ----------------- |
-| image build ID (both images) | `2026-08-28.24.1` |
+| image build ID (both images) | `2026-09-15.29.1` |
 | `iv-provision` tag           | `3.0.25`          |
 
 Both images publish the same `<date>.<run>.<attempt>` build ID from one pipeline,
 so a single verified ID pins both. Bump them here when they move.
+
+**`2026-09-15.29.1`** is the first build whose prod-lane boot join
+(`iv-tailnet-join`) mints **non-ephemeral** nodes with 10-minute one-use keys, so
+the `api-tailscale` grant can be time-boxed to first boot (exeslim #7). Earlier
+builds mint ephemeral nodes that need the grant again after any long outage.
 
 **Do not pin below `2026-08-28.24.1`.** Earlier builds append the `~/.local/bin`
 PATH export to the END of `~/.bashrc`, below Ubuntu skel's
