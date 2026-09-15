@@ -10,22 +10,35 @@ credential ever reaches the VM: exe.dev injects the Tailscale OAuth credential a
 the network edge, so the proxy is reachable only from a VM the control plane
 deliberately attached it to.
 
-That attachment *is* the consent signal. Least authority means it is normally
-attached to nothing — attach it, provision, detach. An unattached VM simply stays
-off the tailnet, and `provision-iv.sh` says so and carries on.
+That attachment _is_ the consent signal. An unattached VM simply stays off the
+tailnet, and `provision-iv.sh` says so and carries on.
+
+> **Corrected 2026-09-15.** This paragraph used to say the integration "is
+> normally attached to nothing — attach it, provision, detach", while the
+> section below said it attaches via the standing `tailnet` tag. Both were in
+> this file at once, and the fleet had been on the tag since 2026-08-19 — 19 of
+> 21 VMs, including the four internet-facing ones the 2026-07-28 remediation
+> had specifically taken it off. The contract now has two lanes, stated in
+> "Required exe.dev integration" below: a **standing** grant via the `tailnet`
+> tag for _private_ dev VMs (the only shape a browser-driven `create-vm` can
+> use, since its token cannot attach), and a **time-boxed** per-VM grant
+> (`integrations attach api-tailscale vm:<vm> --for 30m`) for anything
+> internet-facing and for every prod-lane deployment target. The July finding
+> stands; it is satisfied by keeping the credential off public boxes, not by
+> keeping it off all boxes.
 
 > **Corrected 2026-08-19.** This section previously said there was "no automatic
 > join" and that a VM stays off the tailnet until someone runs the `join-tailnet`
 > workflow by hand. That has never been how fleet VMs actually joined: the personal
 > dotfiles `install.sh` has always performed the join automatically, by exactly the
-> mechanism now in `provision-iv.sh`. Moving the tailscale *install* into the
-> provisioner in 3.0.x without the *join* converted a one-command bring-up into a
+> mechanism now in `provision-iv.sh`. Moving the tailscale _install_ into the
+> provisioner in 3.0.x without the _join_ converted a one-command bring-up into a
 > hand-run OAuth dance — a regression that stayed hidden because every existing VM
 > had already joined via dotfiles.
 
 > **Resolved 2026-08-18.** `provision-iv.sh` now installs `tailscale` from
 > Tailscale's signed apt repository and enables `tailscaled`. Until then the
-> client was not provided by this repo *or* the `exeslim-dev` base — it arrived
+> client was not provided by this repo _or_ the `exeslim-dev` base — it arrived
 > via the personal dotfiles `install.sh` — so `join-tailnet` could not succeed on
 > a freshly provisioned VM at all. Enabling the daemon does not join the tailnet;
 > membership stays the explicit decision described below.
@@ -38,19 +51,27 @@ code, both of which drifted and coupled unrelated things together.
 Joining during provisioning, gated on an integration the control plane attaches,
 is not that. A VM is still just a VM until someone decides it should be a tailnet
 node — the decision is the attachment, made off-VM, rather than a command typed on
-the box. Nothing is baked in, nothing runs on boot, and the credential stays at
-the edge.
+the box. The credential stays at the edge.
+
+> **Corrected 2026-09-15.** "Nothing is baked in, nothing runs on boot" stopped
+> being true for the prod lane on 2026-08-23: the `exeslim` (not `-dev`) image
+> carries `iv-tailnet-join.service`, which at first boot joins as `tag:prod`
+> _iff_ `api-tailscale` answers. It is gated on the same attachment, so the
+> decision is still made off-VM; what changed is that a deployment target with
+> no provisioner can now join at all. It surfaced when `iv-llm-relay` came up
+> `tag:prod` two seconds after boot while the dotfiles `join-tailnet` helper,
+> run minutes later expecting `tag:dev`, found it already joined.
 
 ## The vendor's `tailscale` skill, and what it does not know
 
 Since 2026-09-02 the fleet also carries Tailscale's own agent skill
 (`tailscale/tailscale-skill`, vendored as a team row like every other). It is
-reference material for Tailscale *the product*: policy-file syntax, `tagOwners`,
+reference material for Tailscale _the product_: policy-file syntax, `tagOwners`,
 OAuth client scopes, `tailscale status`/`netcheck` diagnostics, the API. That is
 exactly the material whose absence cost most of a debugging cycle on 2026-08-23,
 when a `tag:dev` mint failed with `requested tags [tag:dev] are invalid or not
 permitted` and two people re-verified the OAuth scope twice before the answer
-turned out to be tag *ownership* -- `tagOwners` must list a tag as an owner of
+turned out to be tag _ownership_ -- `tagOwners` must list a tag as an owner of
 itself.
 
 It would have helped, though not by itself. `enterprise.md` frames OAuth scopes
@@ -72,10 +93,10 @@ prevent. No credential is ever meant to reach a VM.
 
 So the boundary is:
 
-| Question | Authority |
-| --- | --- |
-| What does this policy-file stanza mean? Why did Tailscale reject this key/tag? What is `netcheck` telling me? | the `tailscale` skill |
-| How does *this fleet's* VM get onto the tailnet, and who decided it may? | this document, `join-tailnet`, `provision-iv.sh` |
+| Question                                                                                                      | Authority                                        |
+| ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| What does this policy-file stanza mean? Why did Tailscale reject this key/tag? What is `netcheck` telling me? | the `tailscale` skill                            |
+| How does _this fleet's_ VM get onto the tailnet, and who decided it may?                                      | this document, `join-tailnet`, `provision-iv.sh` |
 
 The two are kept adjacent rather than merged, deliberately. Folding fleet
 specifics into a vendored skill would be overwritten by the next re-vendor
@@ -133,14 +154,26 @@ mint the key. It attaches via the **`tailnet` tag** — a tag that grants this a
 nothing else (see "The `tailnet` tag" below):
 
 ```bash
-ssh exe.dev new --name=<vm> --tag=tailnet     # joins on first provision
-ssh exe.dev tag <vm> tailnet                  # or tag an existing VM, then re-provision
+ssh exe.dev new --name=<vm> --tag=tailnet     # PRIVATE dev VM: joins on first provision
+ssh exe.dev tag <vm> tailnet                  # or tag an existing private VM, then re-provision
 ```
 
-Per-VM attachment (`integrations attach api-tailscale vm:<vm>`) still works and
-is the right tool for a one-off — a canary that should join once and never again.
-The tag is for VMs that are meant to stay fleet members across a recreate, since
-a per-VM attachment dies with the VM.
+**The tag is for private dev VMs only.** For anything internet-facing (a public
+proxy or port) and for every prod-lane deployment target, time-box a per-VM
+grant instead — the image's `iv-tailnet-join` (prod) or `provision-iv.sh` (dev)
+joins inside the window, and the grant lapses with nothing to revoke:
+
+```bash
+ssh exe.dev new --name=<vm> --image=ghcr.io/kylelundstedt/exeslim:<tag>   # no tailnet tag
+ssh exe.dev integrations attach api-tailscale vm:<vm> --for 30m          # within ~2.5 min of boot
+```
+
+Prod-lane nodes are minted **non-ephemeral** (exeslim 2026-09-15), so a
+deployment target never needs the API after that window: reboots and outages
+keep the node. Retire it by deleting the node (retiring.md §5). If an older,
+ephemeral prod node is reaped after a long outage, re-attach for 30 minutes and
+`systemctl start iv-tailnet-join` over the `.exe.xyz` edge. Dev VMs stay
+ephemeral and keep the standing tag because they are recreated, not repaired.
 
 > **Corrected 2026-08-19.** This section previously named the integration
 > `tailscale-api` and said to attach it via a `tag:iv`. The name was wrong — it is
@@ -165,15 +198,15 @@ a per-VM attachment dies with the VM.
 The fleet is subject to two unrelated tagging systems, and the earlier drafts of
 this document silently conflated them. They do not interact at all.
 
-| | **Tailscale tags** | **exe.dev VM tags** |
-| --- | --- | --- |
-| Written | `tag:dev`, `tag:iv-aperture-pilot` | `iv`, `mcp-agent`, `fannie-sflpd` |
-| Set by | the auth key used at `tailscale up`, or the Tailscale admin console | `ssh exe.dev tag <vm> <name>`, or `--tag` at creation |
-| Governs | network reachability and the SSH policy | which integrations a VM receives |
-| Read with | `tailscale status --json` | `curl reflection.int.exe.xyz/tags` |
-| Lives in | the tailnet | the exe.dev control plane |
+|           | **Tailscale tags**                                                  | **exe.dev VM tags**                                   |
+| --------- | ------------------------------------------------------------------- | ----------------------------------------------------- |
+| Written   | `tag:dev`, `tag:iv-aperture-pilot`                                  | `iv`, `mcp-agent`, `fannie-sflpd`                     |
+| Set by    | the auth key used at `tailscale up`, or the Tailscale admin console | `ssh exe.dev tag <vm> <name>`, or `--tag` at creation |
+| Governs   | network reachability and the SSH policy                             | which integrations a VM receives                      |
+| Read with | `tailscale status --json`                                           | `curl reflection.int.exe.xyz/tags`                    |
+| Lives in  | the tailnet                                                         | the exe.dev control plane                             |
 
-The trap is that exe.dev's *attachment syntax* borrows Tailscale's `tag:` prefix
+The trap is that exe.dev's _attachment syntax_ borrows Tailscale's `tag:` prefix
 — `integrations attach api-tailscale tag:iv` refers to the **exe.dev** tag `iv`,
 not to anything Tailscale knows about. A reader who has just been thinking about
 `tag:dev` will read that as a Tailscale tag every time.
@@ -189,9 +222,9 @@ every join key with `"tags":["tag:dev"]` hardcoded, so any VM this repo joins is
 tagged correctly by construction. The SSH policy keys on `tag:dev`, which is what
 makes `ssh <vm>` work fleet-wide.
 
-The one gap is a node that joined by some *other* path. `iv-entire-agent-shelley`
+The one gap is a node that joined by some _other_ path. `iv-entire-agent-shelley`
 joined via the old dotfiles `install.sh` carrying only `tag:iv-aperture-pilot`,
-so SSH to it timed out — not refused, *timed out*, which is indistinguishable at
+so SSH to it timed out — not refused, _timed out_, which is indistinguishable at
 a glance from a dead host. It went unnoticed for weeks and was fixed by adding
 `tag:dev` in the console (2026-08-19). Purpose tags and `tag:dev` coexist fine:
 `iv-docs` carries `tag:dev` **and** `tag:iv-aperture-admin`.
@@ -205,9 +238,9 @@ hypothetical for this fleet; it is how the MCP integrations already arrive.
 
 > **Corrected 2026-08-19 (third time in this section).** The text here said `iv`
 > was "unused for attachment", which was wrong, and wrong in a way worth naming:
-> it was *inferred* rather than checked. From inside a VM, `reflection` reports
+> it was _inferred_ rather than checked. From inside a VM, `reflection` reports
 > that VM's own tags and its own integrations — it does not report attachment
-> *rules*, so no VM can see whether an integration arrived by `vm:`, by `tag:`,
+> _rules_, so no VM can see whether an integration arrived by `vm:`, by `tag:`,
 > or by `auto:all`. Seeing "only `iv-provision` carries `iv`" and concluding
 > "therefore nothing attaches by it" does not follow.
 >
@@ -257,7 +290,7 @@ being lost with the disk. An untagged VM stays off the tailnet exactly as before
 > Durable across a recreate **done deliberately**: `ssh exe.dev new --tag=tailnet`
 > carries the tag, and `cp` inherits tags from the source VM. A replacement
 > created without the flag is a fresh, untagged VM — the tag is not attached to
-> the *name*. That is the correct behaviour (a new VM should not silently inherit
+> the _name_. That is the correct behaviour (a new VM should not silently inherit
 > a grant), but it means the win is "one flag at creation" rather than "nothing to
 > remember".
 
@@ -266,7 +299,7 @@ being lost with the disk. An untagged VM stays off the tailnet exactly as before
 Tagging the existing fleet is safe to do at any time, including immediately.
 `install_tailscale` returns early when `tailscale status` succeeds — it only
 ensures `RunSSH` is set — and never reaches the key-minting path. That matters
-because the join path *deletes any node sharing this hostname* before joining, to
+because the join path _deletes any node sharing this hostname_ before joining, to
 avoid Tailscale's `-1` suffix. On an already-joined VM that would delete the node
 out from under the connection running the provisioner.
 
@@ -295,7 +328,7 @@ unreviewed.
 exe.dev also offers `integrations attach <name> auto:all`, which attaches to
 every VM in the account **including every VM created in the future**. For
 `api-tailscale` that is the wrong shape, and specifically it discards the
-property the top of this document is built on: the attachment *is* the consent
+property the top of this document is built on: the attachment _is_ the consent
 signal.
 
 Under `auto:all` there is no signal left — a throwaway sandbox, a client canary,
@@ -342,18 +375,23 @@ fixed by the scopes on the backing OAuth client, and since 2026-08-19 that is
 **`auth_keys` on `tag:dev`, and nothing else** — the token endpoint echoes it:
 
 ```json
-{"token_type":"Bearer","expires_in":3600,"scope":"auth_keys","tags":"tag:dev"}
+{
+  "token_type": "Bearer",
+  "expires_in": 3600,
+  "scope": "auth_keys",
+  "tags": "tag:dev"
+}
 ```
 
 Measured from a tagged VM after the narrowing:
 
-| Operation | Result |
-| --- | --- |
-| Mint a preauthorized `tag:dev` auth key | **200** — the join works |
-| Mint a key for `tag:iv-aperture-admin` | refused — *"requested tags are invalid or not permitted"* |
-| `GET /tailnet/-/devices` (enumerate the tailnet) | **403** |
-| `GET /device/<id>`, `/device/<id>/routes` | **403** |
-| `GET /acl` (policy file), `/dns/nameservers` | **403** |
+| Operation                                        | Result                                                    |
+| ------------------------------------------------ | --------------------------------------------------------- |
+| Mint a preauthorized `tag:dev` auth key          | **200** — the join works                                  |
+| Mint a key for `tag:iv-aperture-admin`           | refused — _"requested tags are invalid or not permitted"_ |
+| `GET /tailnet/-/devices` (enumerate the tailnet) | **403**                                                   |
+| `GET /device/<id>`, `/device/<id>/routes`        | **403**                                                   |
+| `GET /acl` (policy file), `/dns/nameservers`     | **403**                                                   |
 
 So the accurate summary of the tag is: **a tagged VM can join or rejoin the
 tailnet unattended, and can do nothing else.** It cannot enumerate the tailnet,
@@ -362,9 +400,9 @@ tag.
 
 Before the narrowing this was materially worse — the same token listed all 17
 nodes and could delete any of them, workstations and phones included. Recorded
-because the reasoning generalises: the exe.dev proxy prevents credential *theft*
+because the reasoning generalises: the exe.dev proxy prevents credential _theft_
 (the secret never reaches the VM, cannot be exfiltrated, rotates centrally) but
-it does not bound *authority*. Only the scopes do that, and they are easy to
+it does not bound _authority_. Only the scopes do that, and they are easy to
 leave at whatever the client was first created with.
 
 That is the trade the tag makes, and why it is a tag of its own rather than a
@@ -381,10 +419,10 @@ The client previously held `auth_keys` **and** `devices:core`. Only `auth_keys`
 is required to join; `devices:core` was what allowed deleting other people's
 nodes:
 
-| Scope | Grants | Needed for |
-| --- | --- | --- |
-| `auth_keys` | create/delete auth keys for the named tags | joining — the whole point |
-| `devices:core` | list devices; delete, rename, re-tag any of them | *only* stale-node cleanup |
+| Scope          | Grants                                           | Needed for                |
+| -------------- | ------------------------------------------------ | ------------------------- |
+| `auth_keys`    | create/delete auth keys for the named tags       | joining — the whole point |
+| `devices:core` | list devices; delete, rename, re-tag any of them | _only_ stale-node cleanup |
 
 In the current admin console the scopes are a Read/Write grid rather than a list
 of scope names, which does not resemble the API documentation. **Settings → Trust

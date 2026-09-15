@@ -99,6 +99,19 @@ curl -s --max-time 300 -X POST https://api-exe-new.int.exe.xyz/exec -d "new --na
 provisioning prints `not joined: api-tailscale integration not attached` and
 carries on regardless -- a quiet no-op, not an error. Tag and prompt are a pair.
 
+**Why the dev lane keeps a standing attachment (decided 2026-09-15).** The
+least-authority shape is attach-then-detach, but this token cannot attach or
+detach (403 by design), so a browser-created dev VM can only get the credential
+through something fixed at `new` time — the tag. The trade was made
+explicitly: dev VMs are private (exe.dev proxy `Private`, no public port), so a
+standing key-minting grant on them is the same exposure as the VM itself. The
+rule that makes this safe: **`tailnet` goes only on private VMs.** Anything
+internet-facing (`share set-public`, a public port) must not carry it — use a
+time-boxed `integrations attach … --for` from the mini instead, as for
+deployment targets below. Widening this token to `integrations attach` would
+let the dev lane time-box too; it was judged broader authority (attach _any_
+integration to _any_ VM) than the standing tailnet grant on private boxes.
+
 **Always pin the tag.** An unpinned checkout "succeeds, prints nothing alarming,
 and provisions an older recipe" (`upgrade-vm` skill).
 
@@ -193,8 +206,26 @@ Do **not** add `--prompt`: `new --prompt` requires an image with Shelley, so it
 would silently do nothing. Do not add the provisioning command either -- there is
 no `git` to clone with. A deployment target gets its payload pushed to it.
 
-Add `--tag=tailnet` here only if the user asks for tailnet access; nothing on this
-image will join on its own, so it is then a manual `join-tailnet`.
+Do **not** add `--tag=tailnet` to a deployment target. Since exeslim 2026-08-23
+the image _does_ join on its own: `iv-tailnet-join.service` runs at first boot
+and, if the `api-tailscale` integration answers, joins as **`tag:prod`** (never
+`tag:dev`; these boxes are internet-facing). The `tailnet` tag would make that
+credential a _standing_ grant on an internet-facing VM — exactly what the
+2026-07-28 remediation removed. Instead, when the target should be a tailnet
+node, someone with lobby access (the mini) time-boxes the grant right after
+`new`:
+
+```
+ssh exe.dev integrations attach api-tailscale vm:<name> --for 30m
+```
+
+The unit retries for ~2.5 minutes at boot, so attach within that window — or
+attach first and create second. Access lapses on its own; nothing to detach.
+This token cannot do it (`integrations attach` is 403 here), so a deployment
+target that needs the tailnet is a two-party creation: this skill runs `new`,
+the mini runs the attach. Prod-lane nodes are minted **non-ephemeral** (exeslim
+2026-09-15), so after that one window the VM never needs the API again; retire
+it by deleting the node ([retiring.md](../../retiring.md) §5).
 
 ## Pins
 
