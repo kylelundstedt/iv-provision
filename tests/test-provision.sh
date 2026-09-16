@@ -28,12 +28,13 @@ fi
 # provision-iv.sh itself.
 required=(
   DUCKDB_VERSION TIGRIS_VERSION RCLONE_VERSION
-  HERDR_VERSION AGENTSVIEW_VERSION SHELLEY_VERSION SHELLEY_TAG SHELLEY_COMMIT APEX_VERSION
+  HERDR_VERSION AGENTSVIEW_VERSION TAILCAT_VERSION SHELLEY_VERSION SHELLEY_TAG SHELLEY_COMMIT APEX_VERSION
   DUCKDB_SHA256_AMD64 DUCKDB_SHA256_ARM64
   TIGRIS_SHA256_AMD64 TIGRIS_SHA256_ARM64
   RCLONE_SHA256_AMD64 RCLONE_SHA256_ARM64
   HERDR_SHA256_X86_64 HERDR_SHA256_AARCH64
   AGENTSVIEW_SHA256_AMD64 AGENTSVIEW_SHA256_ARM64
+  TAILCAT_SHA256_AMD64 TAILCAT_SHA256_ARM64
   SHELLEY_SHA256_AMD64 SHELLEY_SHA256_ARM64
   APEX_SHA256_AMD64 APEX_SHA256_ARM64
   ENTIRE_VERSION ENTIRE_PLUGIN_VERSION
@@ -97,7 +98,7 @@ if grep -Eq 'releases/latest|rclone-current|curl[^|]*\|[^|]*(sh|bash)' "$script"
   exit 1
 fi
 
-for managed in duckdb aws tigris rclone herdr agentsview shelley apex; do
+for managed in duckdb aws tigris rclone herdr agentsview tailcat shelley apex; do
   grep -q "/usr/local/bin/${managed}" "$script" || {
     echo "managed tool is not probed by absolute path: $managed" >&2
     exit 1
