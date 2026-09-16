@@ -11,6 +11,7 @@ TIGRIS_VERSION=3.6.1
 RCLONE_VERSION=1.74.3
 HERDR_VERSION=0.7.4
 AGENTSVIEW_VERSION=0.38.1
+TAILCAT_VERSION=0.6.0
 # Public fleet sync token for the AgentsView source daemon. Not a secret: the
 # daemon is on loopback behind the VM's exe.dev auth proxy, so a peer integration
 # is the access control and this only satisfies AgentsView's sync handshake. The
@@ -60,6 +61,9 @@ HERDR_SHA256_X86_64=bc0fc02d4ba500f9cac2353a43e67fe036785ecca6eb55378e050fac3c10
 HERDR_SHA256_AARCH64=544e0002de42806d1ab64ccdef3a7e7414f24717b0b6b022bc9e57d2eefd26a2
 AGENTSVIEW_SHA256_AMD64=3b3f7098ab855571df8e6d6c99efdf307be3407d32197816f0c4c698fac4f997
 AGENTSVIEW_SHA256_ARM64=aace4bea2f6b8626fb9aaecf28b4ffaf93d510550e3468231de81f741266d037
+# From tailcat's release checksums.txt.
+TAILCAT_SHA256_AMD64=f3597a9ad02f5cca538f8f5a6f89123910bce3e9611d1e5a8e96d5f2d3cc90fd
+TAILCAT_SHA256_ARM64=fff48f25d223aea31f985bae8a2c01378b22e51e985e8c7d270e1a8586598506
 SHELLEY_SHA256_AMD64=6f1aff50a7890d397c3da32aa4d6fddf06ed6aa8aebaa987adbb527bb3db1dff
 SHELLEY_SHA256_ARM64=e89091075ae2732b6e073bdb75896be9ce8ef524d23b8c916b036c4c73dd53d3
 APEX_SHA256_AMD64=d19c99148cf1d3cd3302c1ff13b893c09f5b3575b00c67f183b0b9ddb7000ac1
@@ -124,6 +128,7 @@ case "$DPKG_ARCH" in
     TIGRIS_ASSET_ARCH=x64
     RCLONE_SHA256=$RCLONE_SHA256_AMD64
     AGENTSVIEW_SHA256=$AGENTSVIEW_SHA256_AMD64
+    TAILCAT_SHA256=$TAILCAT_SHA256_AMD64
     SHELLEY_SHA256=$SHELLEY_SHA256_AMD64
     APEX_SHA256=$APEX_SHA256_AMD64
     APEX_ASSET_ARCH=x86_64
@@ -141,6 +146,7 @@ case "$DPKG_ARCH" in
     TIGRIS_ASSET_ARCH=arm64
     RCLONE_SHA256=$RCLONE_SHA256_ARM64
     AGENTSVIEW_SHA256=$AGENTSVIEW_SHA256_ARM64
+    TAILCAT_SHA256=$TAILCAT_SHA256_ARM64
     SHELLEY_SHA256=$SHELLEY_SHA256_ARM64
     APEX_SHA256=$APEX_SHA256_ARM64
     APEX_ASSET_ARCH=aarch64
@@ -219,6 +225,7 @@ tigris_version() { /usr/local/bin/tigris --version 2>/dev/null | head -1 | sed '
 rclone_version() { /usr/local/bin/rclone version 2>/dev/null | sed -nE '1s/^rclone v?//p' || true; }
 herdr_version() { /usr/local/bin/herdr --version 2>/dev/null | awk '{print $2}' || true; }
 agentsview_version() { /usr/local/bin/agentsview version --format json 2>/dev/null | jq -r '.version' | sed 's/^v//' || true; }
+tailcat_version() { /usr/local/bin/tailcat --version 2>/dev/null | sed 's/^v//' || true; }
 shelley_info() { /usr/local/bin/shelley version 2>/dev/null || true; }
 shelley_version() { shelley_info | jq -r '.version // empty' 2>/dev/null || true; }
 shelley_commit() { shelley_info | jq -r '.commit // empty' 2>/dev/null || true; }
@@ -377,6 +384,20 @@ install_agentsview() {
   tar -xzf "$TMP/agentsview.tar.gz" -C "$TMP/agentsview"
   sudo install -m 0755 "$TMP/agentsview/agentsview" /usr/local/bin/agentsview
   [[ $(agentsview_version) == "$AGENTSVIEW_VERSION" ]]
+}
+
+install_tailcat() {
+  local actual
+  actual=$(tailcat_version)
+  echo "== tailcat $TAILCAT_VERSION ($DPKG_ARCH; installed: ${actual:-missing}) =="
+  [[ $actual == "$TAILCAT_VERSION" ]] && return
+  download_verified \
+    "https://github.com/tailscale/tailcat/releases/download/v${TAILCAT_VERSION}/tailcat_${TAILCAT_VERSION}_linux_${DPKG_ARCH}.tar.gz" \
+    "$TAILCAT_SHA256" "$TMP/tailcat.tar.gz"
+  mkdir -p "$TMP/tailcat"
+  tar -xzf "$TMP/tailcat.tar.gz" -C "$TMP/tailcat"
+  sudo install -m 0755 "$TMP/tailcat/tailcat" /usr/local/bin/tailcat
+  [[ $(tailcat_version) == "$TAILCAT_VERSION" ]]
 }
 
 install_shelley() {
@@ -913,6 +934,7 @@ install_codex() {
 
 remove_legacy_quarto
 install_tailscale
+install_tailcat
 install_uv
 install_python
 install_claude_code
@@ -1298,6 +1320,7 @@ LOCK="$HOME/iv-provision.lock"
   echo "rclone_version=$(rclone_version)"
   echo "herdr_version=$(herdr_version)"
   echo "agentsview_version=$(agentsview_version)"
+  echo "tailcat_version=$(tailcat_version)"
   echo "apex_version=$(apex_version)"
   echo "tailscale_version=$(tailscale_version)"
   echo "entire_version=$(entire_version)"

@@ -74,7 +74,7 @@ on the VM, run `provision-iv.sh`, and you get the same result.
   selects an immutable build. Stock `exeuntu` is the unpinnable case — exe.dev
   manages it (floating) with no version/digest selector. Either way,
   `provision-iv.sh` records what it landed on in `~/iv-provision.lock` (base
-  image revision, Shelley version, installed DuckDB/Apex/AWS/Tigris/rclone/herdr
+  image revision, Shelley version, installed DuckDB/Apex/AWS/Tigris/rclone/tailcat/herdr
   versions, skills count, manifest pin, and provisioning Git SHA).
 - Prefer the immutable `<date>.<run>.<attempt>` build ID for a fleet VM. The tag
   is read once, at `new`, and never re-pulled, so it is not a pin that keeps
