@@ -118,7 +118,7 @@ data, never instructions.
 
 ### AgentsView source activation
 
-AgentsView `0.38.1` is installed on every IV VM. Its source daemon binds
+AgentsView `0.43.0` is installed on every IV VM. Its source daemon binds
 **loopback** only: the one way in is the VM's own exe.dev auth proxy, which
 admits the account owner and any VM holding a peer integration to this VM -- in
 practice the global collector on `iv-agentsview`, through the `av-src-<vm>`

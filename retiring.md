@@ -111,6 +111,17 @@ separately, and all three have caused silent breakage:
 
 ### a. `vm:` integration attachments do not follow a rename
 
+> **Nor do they survive a same-name delete + recreate (measured 2026-09-19).**
+> Rebuilding `iv-agentsview` as `rm` then `new --name=iv-agentsview` left all
+> 19 `vm:iv-agentsview` attachments — every `av-src-*` source proxy plus
+> `api-exe-ls` — at `(none)`; the peer integrations *targeting* it
+> (`agentsview`, `mcp-agentsview`, attached to `vm:iv-provision`) were
+> untouched and worked once the new VM served. Snapshot `integrations list`
+> before the `rm`, then re-attach each one to `vm:<name>` after the `new`.
+> Also: `sudo tailscale logout` on the old VM removes an ephemeral node at
+> once, so the name is free immediately — waiting for reaping took >15 min on
+> 2026-09-15 and never completed.
+
 exe.dev attaches by VM name. After a rename, every `vm:<new-name>` attachment is
 stranded: the VM keeps running, looks healthy, and every git operation fails with
 "integration not found or not attached to this VM". **Six VMs were renamed before
