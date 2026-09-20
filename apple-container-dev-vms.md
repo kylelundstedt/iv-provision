@@ -73,6 +73,23 @@ configuration.
 
 ## Architecture
 
+### Repository ownership
+
+Keep the image and provisioning repositories separate. Their boundaries become
+clearer, not weaker, when the same guest runs on two platforms:
+
+| Repository | Owns | Does not own |
+| --- | --- | --- |
+| `kylelundstedt/exeslim` | Bootable OCI images, Ubuntu/systemd baseline, `exedev` identity, architecture publication, and thin exe.dev/Apple runtime adaptations | Volatile coding agents, skills, MCP configuration, personal host applications |
+| `kylelundstedt/iv-provision` | Guest convergence, pinned tools, agents, skills, services, tailnet promotion, parity tests, inventory, and `create-dev-vm` orchestration | macOS workstation configuration or production application images |
+| `kylelundstedt/dotfiles` | Minimal physical-host configuration for the two Macs and any genuinely host-native services | The Linux development environment now supplied by the container machine |
+
+`exeslim` remains a separate image factory because image boot correctness,
+multi-architecture publication, and runtime-specific filesystem/systemd changes
+must be resolved before `iv-provision` can run. Folding image construction into
+`iv-provision` would combine two independent release cycles: base-image rebuilds
+and guest-tool/configuration releases.
+
 ### Images
 
 ```text
@@ -112,6 +129,44 @@ create-dev-vm orchestrator
 `iv-provision` remains the primary provisioning authority and inventory owner.
 Allowing `klundstedt-mini` to run the workflow provides recovery and higher
 availability when the exe.dev control VM is unavailable.
+
+### macOS host role
+
+Treat `klundstedt-mini` and `klundstedt-mbp` as thin Apple Container hosts, not
+as parallel agent workstations. Almost all development CLIs, coding agents,
+skills, MCP clients, language runtimes, and project dependencies belong inside
+Apple container machines and are installed by `iv-provision`.
+
+The dotfiles repository should gain an explicit minimal host profile, for
+example `--profile apple-container-host`. That profile should install and manage
+only host responsibilities such as:
+
+- Homebrew
+- the official Apple Container CLI, kernel, and system service
+- the host Tailscale client, required for remote execution and host-native
+  service exposure
+- the portable `create-dev-vm` client/executor
+- LM Studio, which remains native to use Apple hardware acceleration
+- one optional operator interface such as Davit or Orchard
+- unavoidable host credential, terminal, backup, and monitoring support
+
+Davit or Orchard may improve interactive management, but automation must target
+the official `container` CLI. They are operator interfaces, not dependencies of
+the VM lifecycle contract. A headless/remote host such as `klundstedt-mini` may
+prefer a CLI-oriented interface; `klundstedt-mbp` may prefer a native GUI.
+
+The minimal host profile should skip installation and configuration of:
+
+- Claude Code, Codex, Shelley, and other coding agents
+- agent skills and MCP registrations
+- Node, uv/Python, DuckDB, and project toolchains unless required by a
+  host-control utility
+- AgentsView and Entire guest services
+- repositories intended to be edited or built inside development VMs
+
+Host-native LM Studio remains deliberately outside the VM. Apple container
+machines consume it through the existing authenticated tailnet/relay path; they
+do not attempt to run the macOS GPU workload inside Linux.
 
 ### Tailnet enrollment and promotion
 
@@ -257,6 +312,19 @@ UID/GID 1000
 
 Do not use host-mounted repositories or dotfiles. The persistent Apple machine
 root filesystem is the development VM's authoritative storage.
+
+### Related host work: add a minimal dotfiles profile
+
+Refactor `kylelundstedt/dotfiles` so the two Macs can select an
+`apple-container-host` profile. Preserve the current full workstation path for
+other uses until the minimal profile is proven. The host profile should install
+the small native substrate described above and explicitly skip agent, skill,
+MCP, and development-tool setup.
+
+Test this separately on `klundstedt-mini` and `klundstedt-mbp`: the mini is the
+always-on remote worker, while the MacBook is a portable worker and recovery
+path. Both must expose the same executor contract to `create-dev-vm` even if
+they use different optional management interfaces.
 
 ### 6. Implement centralized Apple VM creation and tailnet enrollment
 
