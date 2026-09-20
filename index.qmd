@@ -62,6 +62,7 @@ box.
 | [Bootstrap](bootstrap.md) | Standing up a new VM from nothing. |
 | [Maintaining](building.md) | Changing the provisioner and cutting a release. |
 | [Consuming](consuming.md) | Using the layer from another repo or host. |
+| [Apple Development VM Portability](apple-container-dev-vms.md) | Making development and agent VMs equivalent across exe.dev and Apple container machines; image, host, orchestration, tailnet, and parity plan. |
 | [Tailnet Join](tailnet.md) | Joining an exe.dev VM to the tailnet, the two tag systems, and the credential boundary. |
 | [Tailscale in Apple Containers](apple-containers-tailscale.md) | Running Tailscale with native TUN networking, required capabilities, persistent state, and peer-path checks under Apple Container 1.4.1+. |
 | [Registry](registry.md) | The image registry and how VMs pull from it. |
