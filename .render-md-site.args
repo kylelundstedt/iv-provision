@@ -11,6 +11,7 @@
 # full release history, which is why the site had no landing page and the host's
 # non-provisioning roles were invisible.
 --include=index.qmd
+--include=apple-containers-tailscale.md
 --include=design.md
 --include=bootstrap.md
 --include=building.md
