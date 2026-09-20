@@ -43,9 +43,12 @@ hosts that never joined the tailnet are unreachable from it and are reported as
 
 ## What this repo is
 
-The IV provisioning layer for exe.dev VMs: a script (`provision-iv.sh`) plus
-vendored skills and doc-site tooling that turn a stock exe.dev VM into an IV dev
-box.
+Today this repository provisions and operates the exe.dev development fleet. The
+draft [Development Platform](development-platform.md) architecture extends that
+same guest-configuration and management layer to Apple Container. The repo
+contains `provision-iv.sh`, current exe.dev lifecycle workflows, vendored skills,
+and doc-site tooling; the cross-provider workflows described in the draft are
+not yet implemented.
 
 | File | Role |
 | ---- | ---- |
@@ -62,7 +65,8 @@ box.
 | [Bootstrap](bootstrap.md) | Standing up a new VM from nothing. |
 | [Maintaining](building.md) | Changing the provisioner and cutting a release. |
 | [Consuming](consuming.md) | Using the layer from another repo or host. |
-| [Apple Development VM Portability](apple-container-dev-vms.md) | Making development and agent VMs equivalent across exe.dev and Apple container machines; image, host, orchestration, tailnet, and parity plan. |
+| [Development Platform](development-platform.md) | Platform-neutral architecture: management, gateway, compute, identity, models, MCP, credentials, inventory, and availability. |
+| [Apple Container Development VMs](apple-container-dev-vms.md) | The Apple runtime adapter: container machines, images, macOS hosts, Orchard/Compose, LM Studio, and parity work. |
 | [Tailnet Join](tailnet.md) | Joining an exe.dev VM to the tailnet, the two tag systems, and the credential boundary. |
 | [Tailscale in Apple Containers](apple-containers-tailscale.md) | Running Tailscale with native TUN networking, required capabilities, persistent state, and peer-path checks under Apple Container 1.4.1+. |
 | [Registry](registry.md) | The image registry and how VMs pull from it. |
