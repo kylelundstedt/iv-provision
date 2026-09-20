@@ -1,476 +1,137 @@
 ---
-title: "Apple Container Development VM Portability"
+title: "Apple Container Development VMs"
 ---
 
 ## Status
 
-Draft design, recorded 2026-09-20.
+Draft Apple runtime design, recorded 2026-09-20.
 
-This project makes Industry Vault development and agent VMs functionally
-identical on two runtimes:
+This page describes the Apple-specific adapter for the broader
+[IV Development Platform](development-platform.md). The platform page owns
+lifecycle orchestration, Aperture, tailnet promotion, remote MCP, cloud models,
+credentials, inventory, and high availability. This page owns the decisions
+required to make an Apple container machine behave like an exe.dev development
+VM.
 
-- exe.dev VMs built from `exeslim-dev`
-- Apple Container VMs built from an Apple-specific `exeslim-dev` derivative
-
-Production VMs remain on exe.dev. This project does not attempt to make Apple
-Container a production hosting platform.
+Production application VMs remain on exe.dev.
 
 The companion [Tailscale in Apple Containers](apple-containers-tailscale.md)
-page records the verified Apple Container 1.4.1 kernel TUN configuration. This
-page records the broader VM portability design and implementation plan.
+page records the verified Apple Container 1.4.1 kernel TUN configuration.
 
-## Goal
+## Apple parity goal
 
-A developer or agent should find the same environment after connecting to a VM
-on either platform:
+An Apple development VM should converge on the platform contract:
 
 - user `exedev`, UID/GID 1000, home `/home/exedev`
 - Ubuntu 24.04 userspace
-- the same shell, PATH, filesystem layout, packages, and systemd services
-- the same pinned IV tools, coding agents, skills, MCP configuration, and data
-  locations
-- the same Tailscale hostname, `tag:dev` identity, MagicDNS behavior, and
-  Tailscale SSH access
-- the same `iv-provision.lock` contract, apart from explicit platform and
-  architecture fields
+- the same shell, PATH, packages, systemd services, tools, agents, and skills as
+  an exe.dev development VM
+- persistent guest-owned repositories and agent state
+- native `arm64` binaries where available
+- `tag:dev`, MagicDNS, and Tailscale SSH after platform enrollment
+- the same model, MCP, and lifecycle interfaces defined by the development
+  platform
 
-“Identical” means behavioral parity, not byte identity. Apple hosts run native
-`arm64`; current exe.dev VMs run `amd64`. The Linux kernel, virtual hardware,
-boot mechanism, and surrounding platform control plane also differ.
+Expected differences are limited to architecture, kernel, virtual hardware,
+boot mechanism, and physical-host services.
 
-## Non-goals
+## Apple-specific non-goals
 
-- Running production workloads on Apple Container
-- Reproducing exe.dev's public ingress, TLS termination, authenticated edge,
-  VM billing, or integration control plane on macOS
-- Making the two architectures produce identical binary hashes
-- Sharing the macOS home directory with the Linux VM
+- Running production application workloads on Apple Container
+- Reproducing exe.dev ingress, TLS/auth edge, billing, or integration attachment
+  semantics on macOS
+- Sharing the macOS home directory with the guest
+- Making ARM64 and AMD64 image contents byte-identical
+- Replacing the platform's provider-neutral lifecycle, credential, model, or MCP
+  policy with Mac-specific logic
 
 ## Runtime decision: use container machines
 
-Apple development VMs will use `container machine`, not ordinary
-`container run` containers.
+Apple development VMs use `container machine`, not ordinary `container run`
+containers.
 
-Container machines match the intended workload:
+Container machines provide the semantics this workload needs:
 
 - persistent writable root filesystem
-- an actual init system and long-running systemd services
+- the image's init system and long-running systemd services
 - interactive shell and command execution as a machine user
 - explicit CPU and memory allocation
-- stop/start/reboot semantics suitable for a development VM
-- first-boot user setup and an option to disable the host-home mount
+- stop/start/reboot behavior suitable for a development VM
+- first-boot user setup and an option to disable host-home sharing
 
-Ordinary containers remain useful for disposable tests and application-style
-workloads, but are not the development VM abstraction. Running systemd inside a
-plain container would recreate machine semantics with more flags and less
-lifecycle support.
+Ordinary containers remain available for disposable tests, application stacks,
+and Compose projects. They are not the development VM abstraction.
 
-This decision creates one image requirement: Apple container machines boot
+This decision creates an image requirement: Apple container machines boot
 through Apple's machine init and then `/sbin/init`; they do not use exeslim's
-OCI `CMD ["/usr/local/bin/init"]`. The Apple image must therefore make the work
-currently done by that wrapper unnecessary or move it into portable systemd
-configuration.
+OCI `CMD ["/usr/local/bin/init"]`. The Apple image must make that wrapper's work
+unnecessary or move it into portable systemd configuration.
 
-## Architecture
+## Image architecture
 
-### Repository ownership
+Keep `kylelundstedt/exeslim` separate from `iv-provision`. Image construction
+and guest convergence have independent release cycles.
 
-Keep the image and provisioning repositories separate. Their boundaries become
-clearer, not weaker, when the same guest runs on two platforms:
-
-| Repository | Owns | Does not own |
-| --- | --- | --- |
-| `kylelundstedt/exeslim` | Bootable OCI images, Ubuntu/systemd baseline, `exedev` identity, architecture publication, and thin exe.dev/Apple runtime adaptations | Volatile coding agents, skills, MCP configuration, personal host applications |
-| `kylelundstedt/iv-provision` | Guest convergence, pinned tools, agents, skills, services, tailnet promotion, parity tests, inventory, and `create-dev-vm` orchestration | macOS workstation configuration or production application images |
-| `kylelundstedt/dotfiles` | Minimal physical-host configuration for the two Macs and any genuinely host-native services | The Linux development environment now supplied by the container machine |
-
-`exeslim` remains a separate image factory because image boot correctness,
-multi-architecture publication, and runtime-specific filesystem/systemd changes
-must be resolved before `iv-provision` can run. Folding image construction into
-`iv-provision` would combine two independent release cycles: base-image rebuilds
-and guest-tool/configuration releases.
-
-### Images
+A short-term image graph can be:
 
 ```text
 exeslim
-└── exeslim-dev                 exe.dev development image
-    └── exeslim-dev-apple       thin Apple machine compatibility layer
+└── exeslim-dev
+    └── exeslim-dev-apple
 ```
 
-`exeslim-dev-apple` should inherit the exact immutable `exeslim-dev` build used
-by the corresponding exe.dev fleet. It should contain only Apple-specific boot,
-identity, and service changes; common tools and agent configuration remain in
-`iv-provision`.
+The Apple image for a release must derive from the exact immutable
+`exeslim-dev` build used by the corresponding exe.dev fleet. Record both the
+common build ID and platform image digest in inventory and parity output; never
+pair an Apple `latest` with an independently resolved exe.dev `latest`.
 
-### Control plane and workers
-
-`create-dev-vm` is a portable orchestration workflow, not a command coupled to
-one machine.
-
-Initially it can run from:
-
-- `iv-provision`, operating `klundstedt-mini` over Tailscale SSH
-- `klundstedt-mini`, operating its local Apple Container runtime directly
-- `klundstedt-mbp`, operating its local Apple Container runtime directly
-
-The same implementation should support all three modes. The only executor
-difference is local commands versus SSH to a reachable Mac worker.
+If the Apple layer starts undoing substantial exe.dev configuration, refactor
+into sibling outputs from a common stage:
 
 ```text
-create-dev-vm orchestrator
-        |
-        +-- local executor on macOS
-        |
-        `-- SSH executor on a macOS worker
-                    |
-                    `-- Apple container machine
+exeslim-common
+├── exeslim                 exe.dev production
+├── exeslim-dev             exe.dev development
+└── exeslim-dev-apple       Apple development
 ```
 
-`iv-provision` remains the primary provisioning authority and inventory owner.
-Allowing `klundstedt-mini` to run the workflow provides recovery and higher
-availability when the exe.dev control VM is unavailable.
+The Apple image remains thin. Common tools, agents, skills, and services belong
+in `iv-provision`, not in another image layer.
 
-### macOS host role
+## Multi-architecture publication
 
-Treat `klundstedt-mini` and `klundstedt-mbp` as thin Apple Container hosts, not
-as parallel agent workstations. Almost all development CLIs, coding agents,
-skills, MCP clients, language runtimes, and project dependencies belong inside
-Apple container machines and are installed by `iv-provision`.
-
-The dotfiles repository should gain an explicit minimal host profile, for
-example `--profile apple-container-host`. The two Macs should consume the same
-profile and differ only where the physical role requires it. That profile
-should install and manage host responsibilities such as:
-
-- Homebrew
-- the official Apple Container CLI, kernel, and system service
-- the `container compose` plugin from `compose.andon.dev`
-- Orchard as the common optional UI for machines, compose projects, images,
-  networks, logs, and local model visibility
-- the host Tailscale client, required for control-plane connectivity and
-  host-native service exposure
-- the portable `create-dev-vm` client/executor
-- LM Studio on both Macs, using each host's Apple hardware acceleration
-- unavoidable host credential, terminal, backup, and monitoring support
-
-Automation must target the official `container` and `container machine` CLI
-surfaces. Orchard is an operator interface over the same runtime, not a
-requirement for headless automation. The compose plugin is similarly
-complementary: it extends the official CLI as `container compose`, but it
-orchestrates ordinary application containers rather than container machines.
-Development VM lifecycle remains `container machine`; compose is available for
-auxiliary host stacks, disposable services, and other workloads where a group
-of ordinary containers is the right abstraction.
-
-Davit is not part of the proposed common profile. Orchard and the compose plugin
-share the same compose implementation and Orchard also manages container
-machines, so that pair gives the two Macs a more coherent operator surface.
-
-Tailscale implementation is the main intentional host difference:
-
-- `klundstedt-mini` runs the open-source `tailscaled` daemon and accepts
-  Tailscale SSH, so `iv-provision` can use it as a remote worker.
-- `klundstedt-mbp` runs the standard Tailscale app and does not accept Tailscale
-  SSH. It can run `create-dev-vm` locally, but it is not initially a remote
-  worker for `iv-provision`.
-
-Do not force the MacBook onto open-source `tailscaled` merely to make the rows
-look identical. If remote orchestration of the MacBook later matters, add a
-narrow authenticated worker service rather than broadening host access. Keep
-the package set, Apple Container configuration, Orchard, compose plugin, and VM
-workflow the same on both hosts wherever practical.
-
-The minimal host profile should skip installation and configuration of:
-
-- Claude Code, Codex, Shelley, and other coding agents
-- agent skills and MCP registrations
-- Node, uv/Python, DuckDB, and project toolchains unless required by a
-  host-control utility
-- AgentsView and Entire guest services
-- repositories intended to be edited or built inside development VMs
-
-Host-native LM Studio remains deliberately outside the VM. Install and maintain
-it on both Macs. `klundstedt-mini` is the always-on fleet endpoint;
-`klundstedt-mbp`, with 128 GB RAM, can run its own larger or independent local
-models when it is available. Apple container machines should use the model
-server on their own physical host by default, with the existing authenticated
-tailnet/relay path providing cross-host and fleet access. They do not attempt to
-run the macOS GPU workload inside Linux.
-
-### Centralized remote MCP through Aperture
-
-Every development VM should register one remote MCP endpoint:
-
-```text
-https://ai.dojo-sun.ts.net/v1/mcp
-```
-
-Aperture becomes the canonical catalog and credential boundary for
-network-accessible MCP services. It aggregates configured connectors behind that
-single endpoint, injects upstream credentials, prefixes capabilities to avoid
-name collisions, and applies connector- or tool-level grants when clients list
-and invoke tools.
-
-```text
-Claude / Codex / Shelley on every dev VM
-                    |
-                    `-- Aperture /v1/mcp
-                              |-- MotherDuck
-                              |-- GitHub
-                              |-- Tigris
-                              |-- Readwise
-                              |-- AgentsView
-                              `-- personal-mcp
-```
-
-Ordinary `tag:dev` VMs receive the common connector set. The `iv-provision`
-control VM should also carry a distinct control-plane tag, such as
-`tag:iv-control`, whose additional grants expose sensitive administration and
-fleet connectors. Aperture rechecks grants at invocation time; an ordinary VM
-must not discover control-plane tools in the first place.
-
-Although the URL and baseline grants are shared, each calling Tailscale node
-remains separately identifiable for audit, revocation, and per-node limits. No
-MCP service credential is stored in a development VM.
-
-Aperture centralizes remote MCP, not every MCP process. Keep these registered
-directly in the VM when needed:
-
-- stdio MCP processes
-- project-local tools that need the VM filesystem
-- temporary MCP servers started by a repository
-- tools whose useful scope is one VM rather than the fleet
-
-The existing `.int.exe.xyz` MCP URLs are exe.dev edge integrations and generally
-cannot serve as Aperture upstreams. Migrate each service to its direct upstream,
-an Aperture built-in or verified connector, or a tailnet-accessible relay.
-Shared/team credentials map naturally to `tag:dev`; validate personal OAuth
-connectors separately because a tag-owned VM is a device identity rather than a
-human identity.
-
-Skills remain outside Aperture. Native agent skills are local instruction,
-reference, and executable bundles, not MCP tools. `iv-provision` remains the
-canonical owner of the guest skill manifest and vendored skill contents;
-project-specific skills stay in their project repositories.
-
-Aperture in Frankfurt becomes a shared dependency for remote tools. Preserve a
-documented break-glass direct path for genuinely critical services. Local
-skills, repositories, agent execution, and VM-local MCP servers must continue to
-work during an Aperture outage.
-
-### Cloud models and subscription passthrough
-
-Use Aperture as the common cloud-model endpoint on exe.dev and Apple development
-VMs. Aperture supports passthrough providers: the official coding client keeps
-its own subscription OAuth credential, while inference requests travel through
-Aperture for model grants, per-node audit, usage reporting, and guardrails.
-Aperture centralizes the path and policy, not the subscription credential.
-
-The intended client split is:
-
-```text
-Claude Code -- Claude Pro/Max OAuth -----> Aperture -----> Anthropic
-Codex ------ ChatGPT subscription OAuth -> Aperture -----> ChatGPT Codex backend
-Shelley ---- managed/API credential ----> Aperture -----> configured API provider
-LM Studio -- local physical-host path ------------------> local model
-```
-
-#### Claude Code
-
-Configure an Anthropic passthrough provider in Aperture. Every development VM
-uses the same base URL:
-
-```json
-{
-  "env": {
-    "ANTHROPIC_BASE_URL": "http://ai.dojo-sun.ts.net"
-  }
-}
-```
-
-Each VM completes `claude /login` with its user's Claude Pro or Max account. Do
-not set `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` on this path: either value
-replaces the OAuth credential that must pass through. Claude Code performs login
-and token refresh directly against Anthropic; only inference requests traverse
-Aperture.
-
-#### Codex
-
-Configure a ChatGPT-subscription passthrough provider that targets the ChatGPT
-Codex backend. Use one Codex client configuration on both VM platforms:
-
-```toml
-model_provider = "aperture"
-
-[model_providers.aperture]
-name = "Aperture"
-base_url = "http://ai.dojo-sun.ts.net/codex"
-wire_api = "responses"
-requires_openai_auth = true
-```
-
-Each VM signs Codex into the user's ChatGPT Plus, Pro, Team, or Enterprise
-account. `requires_openai_auth = true` makes Codex send that subscription token.
-Codex performs OAuth login and refresh directly against the provider; Aperture
-carries only inference traffic.
-
-#### Credential lifecycle
-
-Subscription login state belongs to the persistent home directory of one VM.
-It must not be baked into an image, copied from a template, committed to a repo,
-or distributed by `iv-provision`. A new VM therefore has a one-time interactive
-Claude and Codex login step after provisioning. Reboots and normal machine
-stop/start preserve that state.
-
-Subscription passthrough is limited to the provider's official client:
-Claude-subscription credentials belong to Claude Code and ChatGPT-subscription
-credentials belong to Codex. Do not route either subscription into Shelley or
-another third-party harness. Shelley uses a centrally configured API-based
-provider through Aperture instead.
-
-Keep normal LM Studio inference on the local physical Mac to avoid routing a
-local model stream through Frankfurt and back. Aperture may expose selected
-local models for cross-host fallback or fleet testing, but it is not the default
-path for a VM to its own host's LM Studio instance.
-
-### Tailnet enrollment and promotion
-
-The intended sequence is:
-
-> `iv-provision` creates the development VM, uses Aperture to authorize its
-> initial tailnet enrollment, and then promotes it to `tag:dev`.
-
-More precisely:
-
-```text
-iv-provision / create-dev-vm
-    |
-    +-- create the Apple container machine on the selected Mac
-    +-- request Aperture Tailnet_provision_node
-    +-- present the one-time approval URL to the operator
-    +-- receive the one-use enrollment key after approval
-    +-- pass the key to the new VM
-    +-- run tailscale up --ssh --accept-dns
-    +-- retrieve the exact Tailscale device ID
-    +-- validate the new user-owned device
-    +-- apply tag:dev through the Tailscale API
-    +-- verify grants, MagicDNS, and Tailscale SSH
-    `-- complete IV provisioning and parity checks
-```
-
-Aperture authorizes initial enrollment without placing a standing Tailscale
-credential on either the Mac or the new VM. Applying `tag:dev` converts the
-node to the same tag-owned identity used by exe.dev development VMs.
-
-The existing `api-tailscale` integration is deliberately insufficient for the
-promotion step: its OAuth token has only the `auth_keys` scope, and device API
-calls return HTTP 403. Do not widen that shared integration. Create a separate
-provisioning credential, for example `api-tailscale-provisioner`, with
-`devices:core` write authority and permission to apply `tag:dev`. Attach it
-directly and exclusively to the `iv-provision` VM.
-
-Promotion must use the exact device ID. Hostname-only matching is unsafe. Before
-applying the tag, validate at least:
-
-- the exact device ID reported by the new VM
-- expected owner identity
-- requested hostname
-- recent creation time
-- expected Aperture-created attributes, when exposed by the API
-- absence of unexpected tags
-- a matching in-progress `create-dev-vm` operation
-
-After promotion, `iv-provision` owns node retirement as well as creation.
-
-## High availability
-
-The workflow should be runnable locally from both Macs. `klundstedt-mini` is
-also remotely runnable from `iv-provision` because it accepts Tailscale SSH;
-`klundstedt-mbp` is local-only until a narrow worker service is deliberately
-added. There are two levels of availability:
-
-1. **VM creation and Aperture enrollment.** Either Mac can perform these locally
-   without `iv-provision`; the mini can additionally be driven remotely.
-2. **Promotion to `tag:dev`.** Initially this still depends on the privileged
-   credential attached to `iv-provision`.
-
-Possible promotion failover designs, to be chosen later:
-
-- allow the new VM to remain temporarily user-owned and promote it when
-  `iv-provision` returns
-- place separate, revocable provisioning OAuth clients in macOS Keychain on
-  one or both Macs
-- operate a second narrowly exposed promotion authority
-
-If a secondary credential is used, it should be independent from the exe.dev
-credential for audit and revocation. `devices:core` is broad authority, so the
-availability benefit must be weighed against the additional credential and
-blast radius.
-
-## Implementation plan
-
-### 1. Define and test the parity contract
-
-Create a machine-readable parity manifest and checks for:
-
-- identity, home, shell, PATH, and environment
-- OS and package baseline
-- enabled system and user services
-- pinned IV tools and coding agents
-- skills and MCP configuration
-- Shelley, Entire, and AgentsView state locations
-- Tailscale state, SSH, DNS, and tags
-- reboot persistence
-
-Keep an explicit allowlist for architecture, kernel, image metadata, and other
-intentional platform differences.
-
-### 2. Publish multi-architecture exeslim images
-
-Publish both images for:
+Publish the relevant exeslim images for:
 
 ```text
 linux/amd64
 linux/arm64
 ```
 
-Validate all apt dependencies and image build steps on ARM64. exe.dev continues
-to use AMD64; Apple selects native ARM64.
+exe.dev continues to select AMD64. Apple selects native ARM64. Validate every
+apt dependency and image build step on both architectures. The existing
+`iv-provision` binary downloads and checksums are already architecture-aware;
+the image workflow is the current publication gap.
 
-### 3. Add `exeslim-dev-apple`
+## Apple image adaptations
 
-Create a thin image derived from a pinned immutable `exeslim-dev` build. It
-should:
+`exeslim-dev-apple` should:
 
-- remove or replace the exe.dev-specific `/dev/vda` fstab entry
-- account for `/sbin/init` boot instead of the exeslim OCI CMD wrapper
+- remove or replace the exe.dev-specific `/dev/vda` root filesystem entry
+- account for `/sbin/init` boot instead of the OCI CMD wrapper
+- verify cgroup, proc/sys, and systemd startup under machine mode
 - disable `exe-setup.service`
-- disable or replace exe.dev-specific Shelley units
-- add Apple container-machine user setup where needed
-- ensure `exedev` remains UID/GID 1000 and the operational user
+- disable or replace exe.dev-specific Shelley units and `/exe.dev` paths
+- add Apple machine user setup where required
+- preserve `exedev` as UID/GID 1000 and the operational user
 - add a stable platform marker such as `/etc/iv-platform`
-- avoid mounting the macOS home directory
+- preserve journald and normal systemd service behavior
+- avoid mounting or depending on the macOS home directory
 
-### 4. Make `iv-provision` platform-aware
+The image should boot to a healthy multi-user system before `iv-provision` runs.
 
-Centralize platform detection and isolate differences behind a small interface:
+## Identity and storage
 
-```text
-configure_tailnet
-configure_shelley
-configure_agentsview
-configure_credentials
-record_base_provenance
-configure_service_exposure
-```
-
-Tool installation, checksums, skills, agent configuration, patching, and data
-layout remain common.
-
-### 5. Standardize identity and filesystem behavior
-
-Create Apple machines with the host-home mount disabled. Preserve:
+Create machines with host-home sharing disabled. Preserve:
 
 ```text
 exedev:exedev
@@ -478,118 +139,242 @@ UID/GID 1000
 /home/exedev
 ```
 
-Do not use host-mounted repositories or dotfiles. The persistent Apple machine
-root filesystem is the development VM's authoritative storage.
+Do not use host-mounted repositories, dotfiles, agent databases, or tool state.
+The persistent container-machine root filesystem is authoritative. This avoids
+macOS UID ownership differences and keeps the VM's behavior aligned with
+exe.dev.
 
-### Related host work: add a minimal dotfiles profile
+Image-derived state and user state have different lifecycles:
 
-Refactor `kylelundstedt/dotfiles` so the two Macs can select an
-`apple-container-host` profile. Preserve the current full workstation path for
-other uses until the minimal profile is proven. The host profile should install
-the small native substrate described above and explicitly skip agent, skill,
-MCP, and development-tool setup.
+- base-image changes normally recreate the machine
+- tools and configuration can converge in place through `iv-provision`
+- subscription logins and repository state persist with the machine filesystem
+- backup/restore must be designed before machines hold irreplaceable work
 
-Test this separately on `klundstedt-mini` and `klundstedt-mbp`: the mini is the
-always-on remote worker, while the MacBook is a portable worker and recovery
-path. Both must expose the same executor contract to `create-dev-vm` even if
-they use different optional management interfaces.
+## Apple Shelley adapter
 
-### 6. Implement centralized Apple VM creation and tailnet enrollment
+Use the same pinned Shelley binary, database path, and agent state layout as an
+exe.dev development VM. The Apple adapter must:
 
-Implement the orchestration described above:
+- generate a local Shelley configuration instead of reading
+  `/exe.dev/shelley.json`
+- replace the exe.dev-specific socket/service assumptions without changing the
+  database location
+- keep the listener private to the machine or an authenticated host/tailnet
+  proxy
+- expose browser access through an authenticated tailnet path, not a public bind
+- point model and remote MCP traffic at the platform endpoints
+- preserve Shelley state across machine stop/start and host reboot
 
-1. select the Mac worker and immutable image
-2. create the container machine
-3. request Aperture enrollment and operator approval
-4. inject the one-use key and join the node
-5. retrieve and validate its device ID
-6. promote it to `tag:dev`
-7. verify Tailscale SSH and policy behavior
-8. run or complete `iv-provision`
-9. record inventory and provenance
+The final URL and authentication mechanism remain a platform open decision, but
+an Apple VM is not parity-complete merely because the Shelley binary starts.
 
-### 7. Centralize remote MCP, cloud models, and credential paths in Aperture
+## macOS host profile
 
-Replace the current per-client matrix of remote MCP registrations with one
-Aperture registration in Claude, Codex, and Shelley. `iv-provision` owns the
-client registration; Aperture owns remote connector definitions, credentials,
-and grants.
+Treat `klundstedt-mini` and `klundstedt-mbp` as thin Apple Container hosts, not
+parallel agent workstations. Almost all development CLIs, agents, skills, MCP
+clients, language runtimes, and project dependencies belong inside container
+machines.
 
-Configure common model routing at the same boundary:
-
-- Claude Code uses Claude Pro/Max subscription passthrough
-- Codex uses ChatGPT subscription passthrough
-- Shelley uses managed or API-key-based providers rather than subscription
-  credentials
-- each new VM performs its own Claude and Codex login after provisioning
-- subscription state persists only in that VM's home directory
-- local LM Studio remains a direct physical-host path by default
-
-Migrate the current remote services deliberately:
-
-- configure MotherDuck, GitHub, Tigris, Readwise, AgentsView, and personal-mcp
-  as Aperture connectors where their authentication and reachability fit
-- replace exe.dev-only `.int.exe.xyz` upstreams with direct endpoints or
-  tailnet relays
-- grant the common set to `tag:dev`
-- grant sensitive fleet and provisioning tools only to `tag:iv-control`
-- validate personal OAuth behavior from tag-owned development VMs
-- retain direct registration only for VM-local and project-local MCP servers
-- document and test a break-glass direct path for critical remote services
-
-Inventory the remaining non-MCP `.int.exe.xyz` dependencies and define portable
-credential paths for the LLM/Codex gateway, private repository access, cloud and
-object-storage access, and other edge-injected services.
-
-Skills do not move into Aperture. Consolidate the guest skill manifest and
-vendored contents under `iv-provision`; remove duplicate host installation as
-the minimal dotfiles profile is adopted.
-
-### 8. Make Shelley portable
-
-Use the same pinned Shelley binary and database path on both platforms. For
-Apple:
-
-- generate a local Shelley configuration
-- replace `/exe.dev/shelley.json`
-- keep the listener private
-- expose it through authenticated tailnet access
-- preserve the same database and agent state layout
-
-### 9. Adapt AgentsView fleet connectivity
-
-Keep the local daemon and archive unchanged. Add a Tailscale source path for
-Apple nodes while retaining exe.dev peer integrations for exe.dev nodes. The
-central collector should enroll and monitor both kinds of sources.
-
-### 10. Implement the portable `create-dev-vm` workflow
-
-The command should support at least:
+The dotfiles repository should provide a common minimal profile such as:
 
 ```text
-create-dev-vm --platform exe ...
-create-dev-vm --platform apple --host klundstedt-mini ...
+install.sh --profile apple-container-host
 ```
 
-For Apple it should pull the pinned image, create the machine, enroll/promote it,
-run provisioning, execute parity checks, and print SSH and Shelley access
-instructions. Local and remote Mac execution must use the same workflow code.
+The profile should install and manage:
 
-### 11. Add continuous parity tests
+- Homebrew
+- the official Apple Container CLI, kernel, and system service
+- the `container compose` plugin from `compose.andon.dev`
+- Orchard as the common optional UI
+- the host's selected Tailscale client
+- the portable `create-dev-vm` executor
+- LM Studio
+- unavoidable host credential, terminal, backup, and monitoring support
 
-Run the same test suite against exe.dev and Apple canaries. Verify identity,
-services, tool versions, tailnet behavior, agent operation, integrations, and
-persistence across stop/start and host reboot.
+It should skip:
 
-## Open decisions
+- Claude Code, Codex, Shelley, and other coding agents
+- agent skills and MCP registrations
+- Node, uv/Python, DuckDB, and project toolchains unless a host-control utility
+  requires them
+- AgentsView and Entire guest services
+- repositories intended to be edited or built inside development VMs
 
-- Exact location and interface of `create-dev-vm`
-- Whether promotion failover on `klundstedt-mini` is worth a second
-  `devices:core` credential
-- How personal OAuth connectors should attribute and authorize calls from
-  tag-owned development VMs
-- Which remote MCP services require a direct break-glass path
-- Authentication and URL shape for Apple-hosted Shelley
-- Inventory format and ownership for Apple machines
-- Backup and restore policy for persistent Apple machine root filesystems
-- Whether additional Mac workers should be supported from the first release
+Preserve the current full workstation path until the minimal profile is proven
+on both hosts.
+
+## Official CLI, Compose, and Orchard
+
+Automation targets the official `container` and `container machine` CLI
+surfaces.
+
+Responsibility is explicit:
+
+```text
+Development VM lifecycle       container machine
+Application/auxiliary stacks   container compose
+Interactive management         Orchard
+```
+
+The Compose plugin orchestrates ordinary containers, not container machines.
+It is useful for auxiliary stacks, disposable services, and other multi-service
+workloads. Orchard and the plugin share the same Compose planning
+implementation, and Orchard also manages container machines, so Orchard is the
+preferred optional UI rather than Davit.
+
+The host profile should verify or reinstall the Compose plugin after Apple
+Container upgrades because the Apple installer currently clears the plugin
+directory.
+
+## Host roles
+
+Keep the two Macs as similar as practical while preserving their deliberate
+Tailscale difference.
+
+### `klundstedt-mini`
+
+- always-on primary Apple VM worker
+- open-source `tailscaled` system daemon
+- accepts Tailscale SSH
+- can run `create-dev-vm` locally
+- can be driven remotely by `iv-provision` or an approved gateway tool
+- runs LM Studio as the durable fleet-local model host
+
+### `klundstedt-mbp`
+
+- portable Apple VM worker and recovery path
+- standard Tailscale app
+- does not accept Tailscale SSH
+- runs `create-dev-vm` locally
+- is not initially a remote worker
+- runs LM Studio locally; 128 GB RAM supports larger independent models
+
+Do not switch the MacBook to open-source `tailscaled` merely for symmetry. If
+remote orchestration later matters, add a narrow authenticated worker service
+rather than broad host access.
+
+Both Macs should otherwise receive the same host profile, Apple Container
+configuration, Compose plugin, Orchard, LM Studio, and VM workflow.
+
+## Host-local LM Studio
+
+LM Studio remains native to use Apple hardware acceleration. A container machine
+should prefer the model server on its own physical host. Today the authenticated
+`iv-llm-relay` path exposes the mini's LM Studio to the fleet; the Apple adapter
+still needs a stable host-local discovery contract, and the MacBook needs an
+equivalent relay only if its models should be reachable off-host.
+
+Do not make Frankfurt Aperture the default route from a VM to its own host's
+local model. Aperture may expose selected models for cross-host fallback,
+central testing, or controlled fleet use.
+
+## Apple executor
+
+The platform's `create-dev-vm` workflow uses the same Apple executor interface in
+two modes:
+
+```text
+local executor
+    `-- container machine ...
+
+remote executor
+    `-- approved command path to Mac
+            `-- container machine ...
+```
+
+`klundstedt-mini` supports both modes because it accepts Tailscale SSH.
+`klundstedt-mbp` supports local execution only until a narrow worker service is
+added.
+
+The executor is responsible only for host operations:
+
+- ensure the Apple Container system is running
+- pull/select the immutable image
+- create the machine with CPU, memory, and `home-mount=none`
+- run commands as root or `exedev` when directed by the management plane
+- stop, start, inspect, and delete the machine
+- return structured results
+
+Enrollment, promotion, desired-state provisioning, and inventory policy remain
+in the [development platform](development-platform.md).
+
+## Apple tailnet enrollment
+
+The Apple executor and management plane cooperate in this sequence:
+
+```text
+create-dev-vm
+    |
+    +-- create the container machine on the selected Mac
+    +-- request Aperture Tailnet_provision_node
+    +-- present the one-time approval URL
+    +-- receive the one-use enrollment key
+    +-- pass the key to the new machine
+    +-- run tailscale up --ssh --accept-dns
+    +-- retrieve the exact Tailscale device ID
+    +-- ask iv-provision to validate and apply tag:dev
+    +-- verify grants, MagicDNS, and Tailscale SSH
+    `-- complete guest provisioning and parity checks
+```
+
+Aperture supplies initial user-approved enrollment without leaving a standing
+credential on the Mac or guest. If `iv-provision` is unavailable, either Mac may
+still create and enroll the machine locally; the node remains temporarily
+user-owned and is not parity-complete. Promotion to `tag:dev`, final access
+verification, and authoritative inventory resume when the management authority
+returns. The platform management plane owns promotion and retirement. The
+low-level TUN and persistence requirements are in
+[Tailscale in Apple Containers](apple-containers-tailscale.md).
+
+## Apple implementation plan
+
+### 1. Publish multi-architecture exeslim images
+
+Add ARM64 builds, retain immutable build IDs, and validate both image variants.
+
+### 2. Add `exeslim-dev-apple`
+
+Implement the machine-mode boot, identity, filesystem, and service adaptations
+listed above. Require a healthy systemd boot before provisioning.
+
+### 3. Make `iv-provision` platform-aware
+
+Centralize platform detection and isolate Apple differences behind functions
+such as:
+
+```text
+configure_shelley
+configure_agentsview
+record_base_provenance
+configure_service_exposure
+```
+
+Tool installation, checksums, skills, agent configuration, patching, and data
+layout remain common.
+
+### 4. Add the minimal dotfiles host profile
+
+Install the same core package set on both Macs, with host-specific Tailscale
+implementation and role-specific services. Stop installing the Linux guest
+environment directly on macOS.
+
+### 5. Implement the Apple executor
+
+Support local execution on both Macs and remote execution on the mini. Use
+structured output and idempotent commands so the platform workflow can retry
+safely.
+
+### 6. Run parity and persistence canaries
+
+Verify identity, services, tool versions, agents, skills, tailnet behavior,
+model/MCP configuration, and state across machine stop/start and host reboot.
+
+## Open Apple-specific decisions
+
+- Backup and restore format for persistent container-machine root filesystems
+- Whether and how the MacBook gains a narrow remote worker service
+- CPU, memory, and disk defaults for development machines
+- How host-local LM Studio endpoints are discovered by each machine
+- Whether additional Mac workers are supported in the first release

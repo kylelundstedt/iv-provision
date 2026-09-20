@@ -1,11 +1,12 @@
 --title=iv-provision
 # This list controls INCLUSION only, not order: verified 2026-09-15 by rendering
 # the site, the generated nav is sorted ALPHABETICALLY BY FILENAME regardless of
-# the order here (bootstrap, building, consuming, design, registry, releases,
-# retiring, tailnet). Reading order is therefore expressed in index.qmd's
-# "Where to go next" table instead. Numeric filename prefixes would force the
-# sidebar order but would change every page URL and break inbound links, which
-# is not worth it for a nine-page site that has a landing page.
+# the order here (Apple pages, bootstrap, building, consuming, design,
+# development platform, registry, releases, retiring, tailnet). Reading order is
+# therefore expressed in index.qmd's "Where to go next" table instead. Numeric
+# filename prefixes would force sidebar order but would change every page URL
+# and break inbound links, which is not worth it for a small site with a landing
+# page.
 #
 # Restructured 2026-09-15: index.qmd was carrying the design rationale AND the
 # full release history, which is why the site had no landing page and the host's
@@ -17,6 +18,7 @@
 --include=bootstrap.md
 --include=building.md
 --include=consuming.md
+--include=development-platform.md
 --include=tailnet.md
 --include=registry.md
 # retiring.md existed in the repo but was never on the site, while dotfiles docs
