@@ -198,6 +198,67 @@ server on their own physical host by default, with the existing authenticated
 tailnet/relay path providing cross-host and fleet access. They do not attempt to
 run the macOS GPU workload inside Linux.
 
+### Centralized remote MCP through Aperture
+
+Every development VM should register one remote MCP endpoint:
+
+```text
+https://ai.dojo-sun.ts.net/v1/mcp
+```
+
+Aperture becomes the canonical catalog and credential boundary for
+network-accessible MCP services. It aggregates configured connectors behind that
+single endpoint, injects upstream credentials, prefixes capabilities to avoid
+name collisions, and applies connector- or tool-level grants when clients list
+and invoke tools.
+
+```text
+Claude / Codex / Shelley on every dev VM
+                    |
+                    `-- Aperture /v1/mcp
+                              |-- MotherDuck
+                              |-- GitHub
+                              |-- Tigris
+                              |-- Readwise
+                              |-- AgentsView
+                              `-- personal-mcp
+```
+
+Ordinary `tag:dev` VMs receive the common connector set. The `iv-provision`
+control VM should also carry a distinct control-plane tag, such as
+`tag:iv-control`, whose additional grants expose sensitive administration and
+fleet connectors. Aperture rechecks grants at invocation time; an ordinary VM
+must not discover control-plane tools in the first place.
+
+Although the URL and baseline grants are shared, each calling Tailscale node
+remains separately identifiable for audit, revocation, and per-node limits. No
+MCP service credential is stored in a development VM.
+
+Aperture centralizes remote MCP, not every MCP process. Keep these registered
+directly in the VM when needed:
+
+- stdio MCP processes
+- project-local tools that need the VM filesystem
+- temporary MCP servers started by a repository
+- tools whose useful scope is one VM rather than the fleet
+
+The existing `.int.exe.xyz` MCP URLs are exe.dev edge integrations and generally
+cannot serve as Aperture upstreams. Migrate each service to its direct upstream,
+an Aperture built-in or verified connector, or a tailnet-accessible relay.
+Shared/team credentials map naturally to `tag:dev`; validate personal OAuth
+connectors separately because a tag-owned VM is a device identity rather than a
+human identity.
+
+Skills remain outside Aperture. Native agent skills are local instruction,
+reference, and executable bundles, not MCP tools. `iv-provision` remains the
+canonical owner of the guest skill manifest and vendored skill contents;
+project-specific skills stay in their project repositories.
+
+Aperture in Frankfurt becomes a shared dependency for remote tools. Preserve a
+documented break-glass direct path for genuinely critical services. Local
+skills, repositories, agent execution, and VM-local MCP servers must continue to
+work during an Aperture outage.
+
 ### Tailnet enrollment and promotion
 
 The intended sequence is:
@@ -372,19 +433,32 @@ Implement the orchestration described above:
 8. run or complete `iv-provision`
 9. record inventory and provenance
 
-### 7. Abstract exe.dev-only credential paths
+### 7. Centralize remote MCP and credential paths in Aperture
 
-Inventory each `.int.exe.xyz` dependency and define an Apple equivalent,
-including:
+Replace the current per-client matrix of remote MCP registrations with one
+Aperture registration in Claude, Codex, and Shelley. `iv-provision` owns the
+client registration; Aperture owns remote connector definitions, credentials,
+and grants.
 
-- LLM/Codex gateway
-- GitHub and private repository access
-- MotherDuck and other MCP services
-- cloud and object-storage credentials
-- AgentsView peer access
+Migrate the current remote services deliberately:
 
-Prefer identical client configuration with platform-specific credential
-delivery underneath it.
+- configure MotherDuck, GitHub, Tigris, Readwise, AgentsView, and personal-mcp
+  as Aperture connectors where their authentication and reachability fit
+- replace exe.dev-only `.int.exe.xyz` upstreams with direct endpoints or
+  tailnet relays
+- grant the common set to `tag:dev`
+- grant sensitive fleet and provisioning tools only to `tag:iv-control`
+- validate personal OAuth behavior from tag-owned development VMs
+- retain direct registration only for VM-local and project-local MCP servers
+- document and test a break-glass direct path for critical remote services
+
+Inventory the remaining non-MCP `.int.exe.xyz` dependencies and define portable
+credential paths for the LLM/Codex gateway, private repository access, cloud and
+object-storage access, and other edge-injected services.
+
+Skills do not move into Aperture. Consolidate the guest skill manifest and
+vendored contents under `iv-provision`; remove duplicate host installation as
+the minimal dotfiles profile is adopted.
 
 ### 8. Make Shelley portable
 
@@ -427,7 +501,9 @@ persistence across stop/start and host reboot.
 - Exact location and interface of `create-dev-vm`
 - Whether promotion failover on `klundstedt-mini` is worth a second
   `devices:core` credential
-- How Apple VMs consume private GitHub and exe.dev-backed MCP services
+- How personal OAuth connectors should attribute and authorize calls from
+  tag-owned development VMs
+- Which remote MCP services require a direct break-glass path
 - Authentication and URL shape for Apple-hosted Shelley
 - Inventory format and ownership for Apple machines
 - Backup and restore policy for persistent Apple machine root filesystems
