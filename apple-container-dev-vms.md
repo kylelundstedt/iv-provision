@@ -259,6 +259,81 @@ documented break-glass direct path for genuinely critical services. Local
 skills, repositories, agent execution, and VM-local MCP servers must continue to
 work during an Aperture outage.
 
+### Cloud models and subscription passthrough
+
+Use Aperture as the common cloud-model endpoint on exe.dev and Apple development
+VMs. Aperture supports passthrough providers: the official coding client keeps
+its own subscription OAuth credential, while inference requests travel through
+Aperture for model grants, per-node audit, usage reporting, and guardrails.
+Aperture centralizes the path and policy, not the subscription credential.
+
+The intended client split is:
+
+```text
+Claude Code -- Claude Pro/Max OAuth -----> Aperture -----> Anthropic
+Codex ------ ChatGPT subscription OAuth -> Aperture -----> ChatGPT Codex backend
+Shelley ---- managed/API credential ----> Aperture -----> configured API provider
+LM Studio -- local physical-host path ------------------> local model
+```
+
+#### Claude Code
+
+Configure an Anthropic passthrough provider in Aperture. Every development VM
+uses the same base URL:
+
+```json
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://ai.dojo-sun.ts.net"
+  }
+}
+```
+
+Each VM completes `claude /login` with its user's Claude Pro or Max account. Do
+not set `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` on this path: either value
+replaces the OAuth credential that must pass through. Claude Code performs login
+and token refresh directly against Anthropic; only inference requests traverse
+Aperture.
+
+#### Codex
+
+Configure a ChatGPT-subscription passthrough provider that targets the ChatGPT
+Codex backend. Use one Codex client configuration on both VM platforms:
+
+```toml
+model_provider = "aperture"
+
+[model_providers.aperture]
+name = "Aperture"
+base_url = "http://ai.dojo-sun.ts.net/codex"
+wire_api = "responses"
+requires_openai_auth = true
+```
+
+Each VM signs Codex into the user's ChatGPT Plus, Pro, Team, or Enterprise
+account. `requires_openai_auth = true` makes Codex send that subscription token.
+Codex performs OAuth login and refresh directly against the provider; Aperture
+carries only inference traffic.
+
+#### Credential lifecycle
+
+Subscription login state belongs to the persistent home directory of one VM.
+It must not be baked into an image, copied from a template, committed to a repo,
+or distributed by `iv-provision`. A new VM therefore has a one-time interactive
+Claude and Codex login step after provisioning. Reboots and normal machine
+stop/start preserve that state.
+
+Subscription passthrough is limited to the provider's official client:
+Claude-subscription credentials belong to Claude Code and ChatGPT-subscription
+credentials belong to Codex. Do not route either subscription into Shelley or
+another third-party harness. Shelley uses a centrally configured API-based
+provider through Aperture instead.
+
+Keep normal LM Studio inference on the local physical Mac to avoid routing a
+local model stream through Frankfurt and back. Aperture may expose selected
+local models for cross-host fallback or fleet testing, but it is not the default
+path for a VM to its own host's LM Studio instance.
+
 ### Tailnet enrollment and promotion
 
 The intended sequence is:
@@ -433,12 +508,22 @@ Implement the orchestration described above:
 8. run or complete `iv-provision`
 9. record inventory and provenance
 
-### 7. Centralize remote MCP and credential paths in Aperture
+### 7. Centralize remote MCP, cloud models, and credential paths in Aperture
 
 Replace the current per-client matrix of remote MCP registrations with one
 Aperture registration in Claude, Codex, and Shelley. `iv-provision` owns the
 client registration; Aperture owns remote connector definitions, credentials,
 and grants.
+
+Configure common model routing at the same boundary:
+
+- Claude Code uses Claude Pro/Max subscription passthrough
+- Codex uses ChatGPT subscription passthrough
+- Shelley uses managed or API-key-based providers rather than subscription
+  credentials
+- each new VM performs its own Claude and Codex login after provisioning
+- subscription state persists only in that VM's home directory
+- local LM Studio remains a direct physical-host path by default
 
 Migrate the current remote services deliberately:
 
