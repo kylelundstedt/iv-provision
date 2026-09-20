@@ -110,11 +110,12 @@ one machine.
 
 Initially it can run from:
 
-- `iv-provision`, operating a Mac worker over Tailscale SSH
+- `iv-provision`, operating `klundstedt-mini` over Tailscale SSH
 - `klundstedt-mini`, operating its local Apple Container runtime directly
+- `klundstedt-mbp`, operating its local Apple Container runtime directly
 
-The same implementation should support both modes. The only difference is
-whether the Apple Container command executor is local or reached over SSH.
+The same implementation should support all three modes. The only executor
+difference is local commands versus SSH to a reachable Mac worker.
 
 ```text
 create-dev-vm orchestrator
@@ -138,22 +139,47 @@ skills, MCP clients, language runtimes, and project dependencies belong inside
 Apple container machines and are installed by `iv-provision`.
 
 The dotfiles repository should gain an explicit minimal host profile, for
-example `--profile apple-container-host`. That profile should install and manage
-only host responsibilities such as:
+example `--profile apple-container-host`. The two Macs should consume the same
+profile and differ only where the physical role requires it. That profile
+should install and manage host responsibilities such as:
 
 - Homebrew
 - the official Apple Container CLI, kernel, and system service
-- the host Tailscale client, required for remote execution and host-native
-  service exposure
+- the `container compose` plugin from `compose.andon.dev`
+- Orchard as the common optional UI for machines, compose projects, images,
+  networks, logs, and local model visibility
+- the host Tailscale client, required for control-plane connectivity and
+  host-native service exposure
 - the portable `create-dev-vm` client/executor
-- LM Studio, which remains native to use Apple hardware acceleration
-- one optional operator interface such as Davit or Orchard
+- LM Studio on both Macs, using each host's Apple hardware acceleration
 - unavoidable host credential, terminal, backup, and monitoring support
 
-Davit or Orchard may improve interactive management, but automation must target
-the official `container` CLI. They are operator interfaces, not dependencies of
-the VM lifecycle contract. A headless/remote host such as `klundstedt-mini` may
-prefer a CLI-oriented interface; `klundstedt-mbp` may prefer a native GUI.
+Automation must target the official `container` and `container machine` CLI
+surfaces. Orchard is an operator interface over the same runtime, not a
+requirement for headless automation. The compose plugin is similarly
+complementary: it extends the official CLI as `container compose`, but it
+orchestrates ordinary application containers rather than container machines.
+Development VM lifecycle remains `container machine`; compose is available for
+auxiliary host stacks, disposable services, and other workloads where a group
+of ordinary containers is the right abstraction.
+
+Davit is not part of the proposed common profile. Orchard and the compose plugin
+share the same compose implementation and Orchard also manages container
+machines, so that pair gives the two Macs a more coherent operator surface.
+
+Tailscale implementation is the main intentional host difference:
+
+- `klundstedt-mini` runs the open-source `tailscaled` daemon and accepts
+  Tailscale SSH, so `iv-provision` can use it as a remote worker.
+- `klundstedt-mbp` runs the standard Tailscale app and does not accept Tailscale
+  SSH. It can run `create-dev-vm` locally, but it is not initially a remote
+  worker for `iv-provision`.
+
+Do not force the MacBook onto open-source `tailscaled` merely to make the rows
+look identical. If remote orchestration of the MacBook later matters, add a
+narrow authenticated worker service rather than broadening host access. Keep
+the package set, Apple Container configuration, Orchard, compose plugin, and VM
+workflow the same on both hosts wherever practical.
 
 The minimal host profile should skip installation and configuration of:
 
@@ -164,9 +190,13 @@ The minimal host profile should skip installation and configuration of:
 - AgentsView and Entire guest services
 - repositories intended to be edited or built inside development VMs
 
-Host-native LM Studio remains deliberately outside the VM. Apple container
-machines consume it through the existing authenticated tailnet/relay path; they
-do not attempt to run the macOS GPU workload inside Linux.
+Host-native LM Studio remains deliberately outside the VM. Install and maintain
+it on both Macs. `klundstedt-mini` is the always-on fleet endpoint;
+`klundstedt-mbp`, with 128 GB RAM, can run its own larger or independent local
+models when it is available. Apple container machines should use the model
+server on their own physical host by default, with the existing authenticated
+tailnet/relay path providing cross-host and fleet access. They do not attempt to
+run the macOS GPU workload inside Linux.
 
 ### Tailnet enrollment and promotion
 
@@ -219,11 +249,13 @@ After promotion, `iv-provision` owns node retirement as well as creation.
 
 ## High availability
 
-The workflow should be runnable from `klundstedt-mini`, but there are two
-levels of availability:
+The workflow should be runnable locally from both Macs. `klundstedt-mini` is
+also remotely runnable from `iv-provision` because it accepts Tailscale SSH;
+`klundstedt-mbp` is local-only until a narrow worker service is deliberately
+added. There are two levels of availability:
 
-1. **VM creation and Aperture enrollment.** The mini can perform these locally
-   without `iv-provision`.
+1. **VM creation and Aperture enrollment.** Either Mac can perform these locally
+   without `iv-provision`; the mini can additionally be driven remotely.
 2. **Promotion to `tag:dev`.** Initially this still depends on the privileged
    credential attached to `iv-provision`.
 
@@ -231,8 +263,8 @@ Possible promotion failover designs, to be chosen later:
 
 - allow the new VM to remain temporarily user-owned and promote it when
   `iv-provision` returns
-- place a separate, revocable provisioning OAuth client in macOS Keychain on
-  `klundstedt-mini`
+- place separate, revocable provisioning OAuth clients in macOS Keychain on
+  one or both Macs
 - operate a second narrowly exposed promotion authority
 
 If a secondary credential is used, it should be independent from the exe.dev
