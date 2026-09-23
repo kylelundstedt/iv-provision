@@ -4,7 +4,7 @@ title: "Apple Container Development VMs"
 
 ## Status
 
-Draft Apple runtime design, recorded 2026-09-20.
+Draft Apple runtime design, recorded 2026-09-20 and revised 2026-09-23.
 
 This page describes the Apple-specific adapter for the broader
 [IV Development Platform](development-platform.md). The platform page owns
@@ -199,7 +199,9 @@ It should skip:
 - agent skills and MCP registrations
 - Node, uv/Python, DuckDB, and project toolchains unless a host-control utility
   requires them
-- AgentsView and Entire guest services
+- AgentsView, which is retired from the target platform
+- Entire on the physical host; Entire remains part of each development VM's Git
+  provenance path
 - repositories intended to be edited or built inside development VMs
 
 Preserve the current full workstation path until the minimal profile is proven
@@ -260,15 +262,17 @@ configuration, Compose plugin, Orchard, LM Studio, and VM workflow.
 
 ## Host-local LM Studio
 
-LM Studio remains native to use Apple hardware acceleration. A container machine
-should prefer the model server on its own physical host. Today the authenticated
-`iv-llm-relay` path exposes the mini's LM Studio to the fleet; the Apple adapter
-still needs a stable host-local discovery contract, and the MacBook needs an
-equivalent relay only if its models should be reachable off-host.
+LM Studio remains native to use Apple hardware acceleration. Each Mac exposes
+its loopback-only server through a tailnet-only `/lmstudio` Serve path, and
+Aperture registers the mini and MacBook as separate self-hosted providers. This
+puts local-model inference into the same centralized session ledger as cloud
+models while keeping LM Studio off the LAN.
 
-Do not make Frankfurt Aperture the default route from a VM to its own host's
-local model. Aperture may expose selected models for cross-host fallback,
-central testing, or controlled fleet use.
+Provider-qualified model names select a physical host deterministically. Before
+making Aperture the default, run latency, time-to-first-token, streaming, and
+large-context canaries across the Frankfurt round trip. Preserve the direct
+host-local endpoint as an explicitly unlogged performance/outage break-glass
+path.
 
 ## Apple executor
 
@@ -346,7 +350,6 @@ such as:
 
 ```text
 configure_shelley
-configure_agentsview
 record_base_provenance
 configure_service_exposure
 ```
@@ -369,7 +372,8 @@ safely.
 ### 6. Run parity and persistence canaries
 
 Verify identity, services, tool versions, agents, skills, tailnet behavior,
-model/MCP configuration, and state across machine stop/start and host reboot.
+model/MCP configuration, Aperture session capture/export, Entire Git provenance,
+and state across machine stop/start and host reboot.
 
 ## Open Apple-specific decisions
 

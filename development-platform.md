@@ -4,7 +4,7 @@ title: "IV Development Platform"
 
 ## Status
 
-Draft architecture, recorded 2026-09-20.
+Draft architecture, recorded 2026-09-20 and revised 2026-09-23.
 
 The Apple Container portability project exposed a broader design: Industry
 Vault needs one development platform whose compute can run on exe.dev or Apple
@@ -27,6 +27,8 @@ development VM on either compute provider:
 - the same pinned IV tools, coding agents, skills, and data locations
 - the same Tailscale hostname, `tag:dev` identity, MagicDNS, and Tailscale SSH
 - the same model and remote MCP endpoints
+- the same centrally captured AI-session record in Aperture
+- the same Git-linked authoring provenance through Entire
 - the same `iv-provision.lock` contract, apart from explicit platform and
   architecture fields
 
@@ -73,8 +75,9 @@ carries model inference and remote tool traffic as well as administrative tools.
 | `kylelundstedt/exeslim` | Bootable OCI images, Ubuntu/systemd baseline, `exedev` identity, architecture publication, and thin provider adaptations | Volatile agents, skills, MCP policy, physical host configuration |
 | `kylelundstedt/iv-provision` | Desired guest state, pinned tools, agents, skills, services, lifecycle orchestration, tailnet promotion, inventory, and parity tests | macOS workstation configuration and production application images |
 | `kylelundstedt/dotfiles` | Minimal physical-Mac configuration and genuinely host-native services | The Linux development environment supplied by a VM |
-| Aperture | Model routing, remote MCP and HTTP connectors, connector credentials, grants, audit, and selected remote execution | Local skills, VM filesystem tools, Git transport, object-storage signing, guest desired state |
-| Project repositories | Project instructions, project-specific skills, code, tests, and durable project memory | Fleet-wide machine provisioning |
+| Aperture | Model routing, authoritative AI-session captures, remote MCP and HTTP connectors, connector credentials, grants, audit, and selected remote execution | Local skills, VM filesystem tools, Git transport, object-storage signing, guest desired state, Git provenance |
+| Entire | Authoring checkpoints and agent decision context linked to the code and Git history they produced | Fleet request routing, model governance, complete operational request capture |
+| Project repositories | Project instructions, project-specific skills, code, tests, Entire checkpoints, and durable project memory | Fleet-wide machine provisioning |
 
 ## Management plane
 
@@ -153,7 +156,6 @@ Claude / Codex / Shelley on every dev VM
                               |-- GitHub
                               |-- Tigris
                               |-- Readwise
-                              |-- AgentsView
                               `-- personal-mcp
 ```
 
@@ -195,7 +197,7 @@ subscription credential.
 Claude Code -- Claude Pro/Max OAuth -----> Aperture -----> Anthropic
 Codex ------ ChatGPT subscription OAuth -> Aperture -----> ChatGPT Codex backend
 Shelley ---- managed/API credential ----> Aperture -----> configured API provider
-LM Studio -- local physical-host path ------------------> local model
+Local models ---------------------------> Aperture -----> LM Studio on either Mac
 ```
 
 ### Claude Code
@@ -243,9 +245,29 @@ Subscription passthrough is limited to the provider's official client. Do not
 route Claude or ChatGPT subscription credentials into Shelley or another
 third-party harness. Shelley uses a centrally configured API-based provider.
 
-Keep ordinary LM Studio inference on the local physical Mac to avoid routing a
-local model stream through Frankfurt and back. Aperture may expose selected
-local models for cross-host fallback or fleet testing.
+### LM Studio providers
+
+Expose each Mac's loopback-only LM Studio instance through a tailnet-only Serve
+path and configure it as a self-hosted OpenAI-compatible Aperture provider:
+
+```text
+lmstudio-mini  -> klundstedt-mini /lmstudio
+lmstudio-mbp   -> klundstedt-mbp  /lmstudio
+```
+
+Enable the API formats LM Studio actually serves, normally OpenAI Chat and
+Responses, and list only approved chat models rather than every embedding model
+returned by `/v1/models`. Use provider-qualified model names initially so a
+request selects its physical host deterministically; do not assume automatic
+health failover merely because two providers expose the same model ID.
+
+This makes Aperture capture local-model prompts, responses, session identity,
+tool-use content, duration, and compatible token usage like any other routed
+inference request. The design is conditional on an end-to-end latency and
+streaming canary: traffic crosses Frankfurt on the way to and from a Mac. Keep a
+documented direct host-local endpoint as a performance or outage break-glass
+path, with the explicit understanding that requests on that path are absent from
+the central Aperture ledger.
 
 ## Selected APIs and administrative tools
 
@@ -293,20 +315,47 @@ supervised detached job rather than depend on one interactive command session.
 SSH. It remains a local executor unless a narrow authenticated worker service is
 added deliberately.
 
-## AgentsView and service-to-service traffic
+## AI-session ledger and Git provenance
 
-Aperture should expose the central AgentsView MCP capability to agents, but it
-should not carry AgentsView source synchronization. Collector-to-source sync is
-ordinary service traffic and belongs directly on the tailnet with a narrow
-network grant.
+Aperture is the authoritative centralized AI-session ledger. For every routed
+LLM request it can retain and export identity, node ID and tags, full request
+and response bodies, redacted headers, model, token classes, duration, tool-use
+details, and the native Claude or Codex session identifier. Configure nonzero
+capture retention and S3-compatible export with `require_export` before retiring
+an existing archive.
 
-Moving all sources to the same tailnet path supports Apple VMs and removes the
-per-exe.dev-VM `av-src-*` peer integrations. This is a deliberate target-state
-migration that supersedes the current peer-integration design; do not remove an
-existing peer until the direct tailnet source has passed sync and access tests,
-and update creation and retirement runbooks as the migration proceeds. The same
-rule applies to other persistent VM-to-VM service traffic: prefer direct tailnet
-networking over an AI gateway.
+Entire remains the authoritative Git-linked provenance layer. It records agent
+decision context and checkpoints with the repository and code they produced,
+which Aperture's request log does not do. Retain:
+
+- the Entire CLI and Git checkpoint backend
+- `entire-agent-shelley`
+- native Claude and Codex Entire integrations where supported
+- `entire-push-check`
+- checkpoint refs pushed with their repositories
+
+Where possible, record the same native agent session identifier in Entire
+metadata that Aperture exports as `session_id`. Verify identifier equivalence for
+Claude, Codex, and Shelley before making that cross-link part of the contract.
+
+AgentsView is retired from the target platform rather than migrated. After a
+side-by-side capture canary and archive preservation, remove:
+
+- the `iv-agentsview` central collector
+- per-VM AgentsView binaries and source daemons
+- `av-src-*` exe.dev integrations and fleet sync tokens
+- the AgentsView MCP endpoint
+- `entire-agent-agentsview`
+- AgentsView provisioning, monitoring, backup, and retirement steps
+
+This deliberately gives up AgentsView-specific semantic recall, secret scans,
+Git outcome analytics, and normalized local harness archives. Aperture's full
+capture/export plus Entire's Git provenance are the chosen replacement. Direct
+LM Studio or other break-glass inference that bypasses Aperture is an explicit
+logging gap, while Entire can still retain code-linked authoring context.
+
+Ordinary persistent VM-to-VM service traffic continues to belong directly on
+the tailnet rather than through Aperture.
 
 ## High availability and failure boundaries
 
@@ -357,7 +406,8 @@ and test retirement as well as creation.
 
 Register one Aperture MCP endpoint in Claude, Codex, and Shelley. Configure
 common and control-plane connector grants. Configure Claude and Codex
-subscription passthrough, API-based Shelley providers, and the one-time login
+subscription passthrough, API-based Shelley providers, both LM Studio hosts,
+full-capture retention, S3 export with `require_export`, and the one-time login
 runbook.
 
 ### 5. Consolidate credentials and agent configuration
@@ -366,10 +416,14 @@ Move fleet guest instructions, skills, settings, and remote MCP registration
 under `iv-provision`. Reduce dotfiles to the physical-host role. Add narrow
 control-plane MCP tools rather than raw administrative API proxies.
 
-### 6. Move service synchronization to the tailnet
+### 6. Retire AgentsView and preserve Entire provenance
 
-Migrate AgentsView sources and other persistent service-to-service paths away
-from per-VM exe.dev peer integrations. Keep Aperture for agent-facing tools.
+Run representative Claude, Codex, Shelley, MCP, and LM Studio sessions through
+Aperture and compare its retained/S3-exported captures with the existing
+AgentsView archive. Preserve the historical archive, remove the collector,
+source daemons, integrations, MCP endpoint, and AgentsView adapter, and keep the
+Entire checkpoint path and scheduled push verification. Update VM creation,
+provisioning, monitoring, backup, and retirement runbooks in the same migration.
 
 ### 7. Add inventory, audit, and availability behavior
 
@@ -388,6 +442,9 @@ MCP calls, Tailscale SSH, service health, and stop/start persistence.
 - Whether Mac promotion failover justifies another `devices:core` credential
 - How personal OAuth connectors authorize tag-owned development VMs
 - Which services require direct break-glass paths
+- Whether Frankfurt latency is acceptable for both LM Studio hosts
+- Whether Entire and Aperture expose identical Claude, Codex, and Shelley
+  session identifiers for durable cross-linking
 - Portable Git clone/push credential design
 - Portable S3 signing and short-lived credential design
 - Authentication and URL shape for Apple-hosted Shelley
