@@ -119,9 +119,11 @@ convergence.
 Use it under these boundaries:
 
 - Register it only on designated operator clients and the `iv-provision` control
-  VM, not on every development VM. Until the authenticated `tools/list`, OAuth
-  grant, token storage, refresh, and revocation behavior are qualified, treat the
-  grant as account-wide.
+  VM, not on every development VM. At connection time, exe.dev offers either
+  full-lobby authority, including SSH into every VM, or authority over one
+  selected VM. Use the one-VM grant whenever the task is machine-local; treat it
+  as full shell authority over that VM. Reserve the full-lobby grant for explicit
+  fleet administration on the control host.
 - Authenticate after provisioning. Browser OAuth state is mutable user state and
   must not be baked into an image, committed, copied between VMs, or recorded in
   `iv-provision.lock`.
@@ -133,6 +135,12 @@ Use it under these boundaries:
   but image selection, pinned release, bootstrap prompt, enrollment, audit, and
   parity verification remain policy-bearing orchestration rather than raw
   provider calls.
+
+The one-VM grant is useful for an **external** client that should operate one
+exe.dev VM without seeing the lobby or its siblings. Registering that same grant
+inside the target VM usually adds nothing: a local coding agent already has the
+VM's shell and filesystem. The security boundary belongs on the operator client,
+not inside the machine it controls.
 
 This is deliberately not a fleet MCP connector. If ordinary agents need a
 control-plane action, expose a reviewed workflow through the control tier rather

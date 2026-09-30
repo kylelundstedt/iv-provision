@@ -375,12 +375,21 @@ It does **not** change what gets baked or provisioned onto ordinary VMs:
   current edge-held credential and explicit command allowlist are stronger and
   do not require a browser login.
 
-As of 2026-09-30 the public MCP documentation names the endpoint and OAuth setup
-but does not document the tool inventory or a least-privilege scope model. The
-server therefore needs a control-host canary before it replaces any existing
-path: capture `tools/list`, test read and mutation boundaries, locate token
-storage, and prove refresh and revocation. Until then, treat its grant as
-potentially account-wide.
+As clarified by exe.dev on Discord on 2026-09-30, connection authorization has
+two coarse choices: the **full lobby**, including the ability to SSH into every
+VM, or **one selected VM**. Choose the one-VM grant for work confined to a
+single machine; it is still equivalent to full shell authority over that VM.
+Reserve the full-lobby grant for `iv-provision` and other deliberate fleet
+administration — it is effectively account-wide control, not a read-only
+inventory credential. The one-VM grant is most useful on an external operator
+client; installing it inside that VM is generally redundant because a local
+agent already has its shell and filesystem.
+
+The public documentation still does not list the MCP tools, and neither grant is
+a command-level allowlist. A control-host canary remains required before the MCP
+replaces an existing path: capture `tools/list`, prove the one-VM boundary, test
+read and mutation behavior, locate token storage, and verify refresh and
+revocation.
 
 The existing skills remain useful because they encode workflows and policy, not
 just transport. Two hand-written skills make creation possible without a laptop,
