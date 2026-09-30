@@ -106,8 +106,11 @@ every cycle.
 rename <new> <old>
 ```
 
-`rename` changes the exe.dev name and **nothing else**. Three things move
-separately, and all three have caused silent breakage:
+`rename` changes the exe.dev control-plane name. Treat four dependent names as
+separate state and verify each one; all four have caused silent breakage. On
+2026-09-30 exe.dev also updated the guest OS hostname on four live renames, but
+that behavior differs from the older measurement below and did not update
+Tailscale or integrations. Do not infer convergence from `hostname` alone.
 
 ### a. `vm:` integration attachments do not follow a rename
 
@@ -134,9 +137,14 @@ anyone noticed, all six unable to fetch or push.**
 A `tag:` attachment is immune -- it follows the tag, not the name. `api-tailscale`
 is attached via `tag:tailnet` for exactly this reason.
 
-### b. The OS hostname does not change
+### b. Verify the OS hostname
+
+Older exe.dev renames left the guest hostname unchanged. Four live renames on
+2026-09-30 did update it automatically. Verify rather than depending on either
+behavior, and correct it if needed:
 
 ```bash
+ssh <old>.exe.xyz 'hostname'
 ssh <old>.exe.xyz 'sudo hostnamectl set-hostname <old>'
 ```
 
@@ -154,10 +162,21 @@ ssh <old>.exe.xyz 'sudo tailscale logout'
 # a prod-lane VM)
 ```
 
+### d. AgentsView peer integrations encode the VM name twice
+
+An enrolled agent VM has an `av-src-<name>` peer integration whose target is
+`https://<name>.exe.xyz:8080/`. A VM rename changes neither the integration name
+nor its target. Create the replacement peer integration, repoint the collector's
+`[[remote_hosts]]` block, verify the new peer path, and remove the old
+integration. Merely reattaching the old integration does not repair its target.
+
 ## 5. Delete the stale Tailscale node
 
 The old VM's node lingers in the admin console as an offline peer. Left there, a
-future VM reusing that name joins as `<name>-1` instead -- silently.
+future VM reusing that name joins as `<name>-1` instead -- silently. On
+2026-09-30, `tailscale logout` followed by re-registration left all four old
+nodes offline rather than deleting them, so logout is not a substitute for this
+step even when it successfully frees the running VM to join under its new name.
 
 Delete it in the Tailscale admin console. **Not** automated, and deliberately so:
 doing it from a VM would need `devices:core` on the shared credential, which
