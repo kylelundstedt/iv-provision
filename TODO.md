@@ -294,6 +294,15 @@ Unauthorized` forever with no alert (telnyx-vm and kgl-thoughts had both gone
       consume it. Only then decide which attended `api-exe-new` calls it
       replaces. Do not fleet-register it or remove the command-scoped edge-held
       path used by unattended jobs and Prompt Shelley.
+- [ ] Qualify Aperture's native **Tailscale** and **Tailscale SSH** MCP
+      endpoints. Save both `tools/list` responses; test machine-add approval,
+      immutable device identification, `tag:dev` assignment/promotion, node
+      retirement, project node restrictions, Tailscale access-rule enforcement,
+      audit records, SSH exit status/timeouts, and detached long-running work.
+      Decide whether these endpoints eliminate the planned
+      `api-tailscale-provisioner` credential and which operations still require a
+      narrow IV control workflow. Keep `api-tailscale` for unattended auth-key
+      bootstrap until that decision is proven.
 - [x] ~~Narrow the tailnet credential.~~ Done 2026-08-19: `auth_keys` on
       `tag:dev` only, `devices:core` dropped, old client revoked. Verified after
       the swap — join path mints preauthorized `tag:dev` keys (200), everything

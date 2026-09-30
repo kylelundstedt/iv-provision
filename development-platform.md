@@ -99,7 +99,8 @@ The provider adapters differ only where the substrate requires it:
 ```text
 create-dev-vm
 ├── exe executor
-│   └── scoped exe.dev HTTPS API
+│   ├── attended: native exe.dev MCP
+│   └── unattended: scoped exe.dev HTTPS API
 └── Apple executor
     ├── local container CLI
     └── container CLI over an approved remote path
@@ -158,11 +159,26 @@ device ID, never hostname alone. Validate owner, hostname, recent creation time,
 expected node attributes, absence of unexpected tags, and a matching
 in-progress lifecycle operation before applying the tag.
 
-The existing `api-tailscale` integration has only `auth_keys` authority and is
-intentionally insufficient for promotion. Do not widen that shared integration.
-Use a separate provisioning credential, such as
-`api-tailscale-provisioner`, attached directly and exclusively to the
-`iv-provision` control VM.
+[Aperture GA](https://tailscale.com/blog/aperture-ga) added two first-party
+endpoints: **Tailscale** for adding nodes and **Tailscale SSH** for reaching
+them. Tailscale access rules still apply, each machine Aperture proposes to add
+requires explicit approval, and the resulting actions are audited. Aperture
+Projects can also bind instructions, tool access, and selected tailnet nodes.
+This creates an attended, provider-neutral enrollment and execution path that
+should be preferred when a person is present.
+
+It does not yet prove the whole IV lifecycle. Qualify whether the Tailscale MCP
+can apply an exact tag-owner identity, promote an existing node by immutable
+device ID, retire a node, and enforce project node restrictions independently of
+tool visibility. Until those tests pass:
+
+- keep the existing `api-tailscale` integration for unattended `auth_keys`
+  bootstrap; it is intentionally insufficient for promotion and must not be
+  widened;
+- defer creating a separate `api-tailscale-provisioner` credential until the
+  native Tailscale MCP's lifecycle gaps are known;
+- keep exact-device validation and the `tag:dev` target posture in
+  `iv-provision`, regardless of which transport performs the mutation.
 
 The concrete Apple enrollment sequence is documented by the
 [Apple runtime adapter](apple-container-dev-vms.md#apple-tailnet-enrollment).
@@ -190,17 +206,22 @@ applies connector- or tool-level grants during discovery and invocation.
 Claude / Codex / Shelley on every dev VM
                     |
                     `-- Aperture /v1/mcp
-                              |-- MotherDuck
-                              |-- GitHub
-                              |-- Tigris
-                              |-- Readwise
-                              `-- personal-mcp
+                              |-- common: MotherDuck, GitHub, Tigris, Readwise
+                              |-- personal-mcp
+                              `-- control only
+                                    |-- Tailscale
+                                    `-- Tailscale SSH
 ```
 
 Ordinary `tag:dev` VMs receive the common connector set. The `iv-provision`
 control VM should also carry a distinct tag such as `tag:iv-control`, whose
-additional grants expose sensitive administration and fleet connectors.
-Ordinary VMs must not discover those tools.
+additional grants expose sensitive administration and fleet connectors,
+including the Tailscale endpoints. Ordinary VMs must not discover those tools.
+
+Use Aperture Projects to narrow control-plane chats further: set explicit tool
+permissions and attach only the tailnet nodes relevant to that project. Projects
+are an authorization and context layer above the network; they do not replace
+Tailscale access rules, which remain the hard connectivity boundary.
 
 The shared endpoint does not erase node identity. Aperture still distinguishes
 callers for audit, revocation, grants, and per-node limits. No upstream MCP
@@ -324,20 +345,25 @@ access.
 Do not expose broad administrative credentials through a raw connector merely
 because Aperture can proxy them. The first-party exe.dev MCP is an operator path,
 not evidence that the owner's whole control-plane grant belongs behind the
-fleet gateway. Publish narrow, validated workflows from the control tier, for
-example:
+fleet gateway.
+
+Likewise, do not build a custom control-plane MCP merely to duplicate native
+Tailscale node enrollment, node selection, or SSH execution. First compose the
+first-party tools with local skills and Aperture Projects. Add a narrow custom
+workflow only where it enforces an invariant or atomic cross-provider operation
+that the native tools cannot express, for example:
 
 ```text
-ivcontrol_create_exe_vm
-ivcontrol_promote_tailnet_node
-ivcontrol_retire_vm
+ivcontrol_create_dev_vm
+ivcontrol_promote_exact_node
+ivcontrol_retire_dev_vm
 ivcontrol_inventory
 ```
 
-Those workflows can run on `iv-provision`, use the native MCP for attended
-operator calls when its tools fit, and keep the existing scoped exe.dev HTTPS
-credentials for unattended execution. They expose policy-bearing operations,
-not a generic pass-through to either backend. Grant them only to
+Those workflows can run on `iv-provision`, use native MCP tools for attended
+operator calls when they fit, and keep the existing scoped exe.dev and Tailscale
+API credentials for unattended execution. They expose policy-bearing
+operations, not a generic pass-through to either backend. Grant them only to
 `tag:iv-control`.
 
 Aperture does not currently solve every credential path:
@@ -351,14 +377,23 @@ Those paths need explicit portable adapters rather than one broad shared token.
 
 ## Remote execution
 
-Aperture's built-in Tailscale SSH connector can list SSH-enabled nodes and run a
-single audited shell command. It is a candidate common execution path for
-`iv-provision`, exe.dev development VMs, Apple VMs, and
-`klundstedt-mini`.
+There are now two first-party remote shell paths, with different jobs:
+
+| Path | Reach | Best use |
+| --- | --- | --- |
+| exe.dev MCP `ssh` | One authorized exe.dev VM, or every VM under a full-lobby grant | Bootstrap and recovery before tailnet enrollment; exe.dev-specific operations |
+| Aperture Tailscale SSH MCP | Nodes reachable from Aperture under Tailscale access rules and project/tool grants | Provider-neutral steady-state operation across exe.dev and Apple VMs |
+
+Aperture's Tailscale SSH endpoint can list eligible nodes and run audited shell
+commands. It is the candidate common execution path for `iv-provision`, exe.dev
+development VMs, Apple VMs, and `klundstedt-mini`. The exe.dev SSH path remains a
+valuable bootstrap and break-glass route because it does not depend on the guest
+already being healthy on the tailnet.
 
 Grant command execution narrowly. The connector acts as the Aperture node and
-is bounded by the tailnet SSH policy. Long-running lifecycle work should start a
-supervised detached job rather than depend on one interactive command session.
+is bounded by the tailnet SSH policy; Projects should further limit visible
+nodes and enabled tools. Long-running lifecycle work should start a supervised
+detached job rather than depend on one interactive command session.
 
 `klundstedt-mbp` uses the standard Tailscale app and does not accept Tailscale
 SSH. It remains a local executor unless a narrow authenticated worker service is
@@ -447,9 +482,11 @@ results in one format.
 
 ### 3. Implement enrollment and promotion
 
-Configure the Aperture Tailnet connector, add the dedicated promotion
-credential on `iv-provision`, validate exact device identity, apply `tag:dev`,
-and test retirement as well as creation.
+Qualify Aperture's native Tailscale and Tailscale SSH MCP endpoints: node-add
+approval, exact device identity, `tag:dev` assignment or promotion, project node
+restrictions, access-rule enforcement, audited SSH, and retirement. Add a
+dedicated API promotion credential on `iv-provision` only for lifecycle
+operations the native endpoint cannot perform safely.
 
 ### 4. Centralize remote MCP and models
 
@@ -490,7 +527,8 @@ MCP calls, Tailscale SSH, service health, and stop/start persistence.
 ## Open decisions
 
 - Exact command and state format for `create-dev-vm`
-- Whether Mac promotion failover justifies another `devices:core` credential
+- Whether the native Tailscale MCP can assign or promote exact device IDs to
+  `tag:dev`, retire nodes, and eliminate a separate `devices:core` credential
 - How personal OAuth connectors authorize tag-owned development VMs
 - Which services require direct break-glass paths
 - Whether Frankfurt latency is acceptable for both LM Studio hosts
