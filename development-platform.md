@@ -4,7 +4,7 @@ title: "IV Development Platform"
 
 ## Status
 
-Draft architecture, recorded 2026-09-20 and revised 2026-09-23.
+Draft architecture, recorded 2026-09-20 and revised 2026-09-30.
 
 The Apple Container portability project exposed a broader design: Industry
 Vault needs one development platform whose compute can run on exe.dev or Apple
@@ -108,6 +108,36 @@ create-dev-vm
 Both paths converge on the same identity, tailnet posture, `iv-provision`
 release, agent configuration, services, and parity checks.
 
+### Native exe.dev MCP
+
+As of 2026-09-30, exe.dev publishes a first-party remote MCP endpoint at
+`https://exe.dev/mcp`. Its documented setup is a user-level client registration
+followed by browser OAuth. That adds a useful **interactive operator adapter** to
+the management plane, but it does not replace either provider execution or guest
+convergence.
+
+Use it under these boundaries:
+
+- Register it only on designated operator clients and the `iv-provision` control
+  VM, not on every development VM. Until the authenticated `tools/list`, OAuth
+  grant, token storage, refresh, and revocation behavior are qualified, treat the
+  grant as account-wide.
+- Authenticate after provisioning. Browser OAuth state is mutable user state and
+  must not be baked into an image, committed, copied between VMs, or recorded in
+  `iv-provision.lock`.
+- Prefer it for attended inventory and routine exe.dev lifecycle interaction once
+  the exact tool surface has passed a canary. Keep the scoped HTTPS API
+  integration for unattended jobs, Shelley workflows, and any operation that
+  needs an enforceable `cmds` allowlist.
+- Keep `create-dev-vm` in this repository. MCP may become one executor transport,
+  but image selection, pinned release, bootstrap prompt, enrollment, audit, and
+  parity verification remain policy-bearing orchestration rather than raw
+  provider calls.
+
+This is deliberately not a fleet MCP connector. If ordinary agents need a
+control-plane action, expose a reviewed workflow through the control tier rather
+than giving each guest the owner's exe.dev OAuth authority.
+
 ## Tailnet identity and enrollment
 
 All development VMs finish as persistent, tag-owned `tag:dev` nodes with
@@ -176,6 +206,13 @@ Keep these registered directly in the VM when required:
 - project-local tools that need the VM filesystem
 - temporary MCP servers started by a repository
 - tools whose useful scope is one VM rather than the fleet
+- a provider's user-authorized control-plane MCP on its designated control host,
+  such as `https://exe.dev/mcp` on `iv-provision`
+
+A user-authorized provider control plane is not part of the common connector set
+and must not appear on ordinary `tag:dev` VMs. Aperture may expose narrower,
+policy-bearing workflows that use it indirectly, but should not relay the
+owner's raw provider authority to the fleet.
 
 Existing `.int.exe.xyz` MCP URLs are exe.dev edge integrations and generally
 cannot be Aperture upstreams. Migrate each service to its direct upstream, an
@@ -277,8 +314,10 @@ OAuth. Good candidates include Notion, Telnyx, PingOne, and read-only API
 access.
 
 Do not expose broad administrative credentials through a raw connector merely
-because Aperture can proxy them. Publish narrow, validated operations from a
-custom control-plane MCP service instead, for example:
+because Aperture can proxy them. The first-party exe.dev MCP is an operator path,
+not evidence that the owner's whole control-plane grant belongs behind the
+fleet gateway. Publish narrow, validated workflows from the control tier, for
+example:
 
 ```text
 ivcontrol_create_exe_vm
@@ -287,9 +326,11 @@ ivcontrol_retire_vm
 ivcontrol_inventory
 ```
 
-That service can run on `iv-provision`, keep existing exe.dev edge credentials
-where they already live, and expose only reviewed operations to Aperture. Grant
-those tools only to `tag:iv-control`.
+Those workflows can run on `iv-provision`, use the native MCP for attended
+operator calls when its tools fit, and keep the existing scoped exe.dev HTTPS
+credentials for unattended execution. They expose policy-bearing operations,
+not a generic pass-through to either backend. Grant them only to
+`tag:iv-control`.
 
 Aperture does not currently solve every credential path:
 
@@ -404,17 +445,19 @@ and test retirement as well as creation.
 
 ### 4. Centralize remote MCP and models
 
-Register one Aperture MCP endpoint in Claude, Codex, and Shelley. Configure
-common and control-plane connector grants. Configure Claude and Codex
-subscription passthrough, API-based Shelley providers, both LM Studio hosts,
-full-capture retention, S3 export with `require_export`, and the one-time login
-runbook.
+Register one Aperture MCP endpoint in Claude, Codex, and Shelley for the common
+fleet connector set. Separately qualify and register the native exe.dev MCP on
+`iv-provision` only. Configure common and control-plane connector grants,
+Claude and Codex subscription passthrough, API-based Shelley providers, both LM
+Studio hosts, full-capture retention, S3 export with `require_export`, and the
+one-time login runbook.
 
 ### 5. Consolidate credentials and agent configuration
 
-Move fleet guest instructions, skills, settings, and remote MCP registration
-under `iv-provision`. Reduce dotfiles to the physical-host role. Add narrow
-control-plane MCP tools rather than raw administrative API proxies.
+Move fleet guest instructions, skills, settings, and common remote MCP
+registration under `iv-provision`. Reduce dotfiles to the physical-host role.
+Keep user-authorized provider MCP state on designated control hosts, and expose
+narrow cross-provider workflows rather than raw administrative pass-throughs.
 
 ### 6. Retire AgentsView and preserve Entire provenance
 

@@ -285,6 +285,14 @@ Unauthorized` forever with no alert (telnyx-vm and kgl-thoughts had both gone
       Deliberately _not_ bundled with the `tailnet` tag work above: pairing a
       rename-and-retag with a security-relevant grant is how one of the two ends
       up unreviewed.
+- [ ] Qualify the native exe.dev MCP on `iv-provision`. Register
+      `https://exe.dev/mcp` in one supported client, complete browser OAuth, save
+      the authenticated `tools/list`, and test read/mutation boundaries, token
+      storage, refresh, revocation, and reconnect after reboot. Determine whether
+      the authorization grant has a documented least-privilege scope and whether
+      Shelley can consume it. Only then decide which attended `api-exe-new`
+      calls it replaces; do not fleet-register it or remove the edge-held path
+      used by unattended jobs and Prompt Shelley.
 - [x] ~~Narrow the tailnet credential.~~ Done 2026-08-19: `auth_keys` on
       `tag:dev` only, `devices:core` dropped, old client revoked. Verified after
       the swap — join path mints preauthorized `tag:dev` keys (200), everything

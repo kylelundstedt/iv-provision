@@ -358,7 +358,32 @@ Remaining renames to the convention:
 
 ## Doing control-plane work from a VM
 
-Two hand-written skills exist so that creating things does not require a laptop,
+### The native exe.dev MCP is an operator path, not a fleet baseline
+
+exe.dev now publishes `https://exe.dev/mcp`, with user-level Claude/Codex setup
+and browser OAuth. That is the preferred path to evaluate for **attended**
+exe.dev inventory and lifecycle work from a supported coding client on
+`iv-provision`; it can remove hand-written protocol glue where its advertised
+tools match the operation.
+
+It does **not** change what gets baked or provisioned onto ordinary VMs:
+
+- do not register or authenticate the owner's exe.dev MCP on every fleet VM;
+- do not copy OAuth state into images, repos, or `iv-provision.lock`;
+- keep `provision-iv.sh` as guest convergence after a VM exists;
+- keep scoped HTTPS/API integrations for unattended jobs and Shelley, where the
+  current edge-held credential and explicit command allowlist are stronger and
+  do not require a browser login.
+
+As of 2026-09-30 the public MCP documentation names the endpoint and OAuth setup
+but does not document the tool inventory or a least-privilege scope model. The
+server therefore needs a control-host canary before it replaces any existing
+path: capture `tools/list`, test read and mutation boundaries, locate token
+storage, and prove refresh and revocation. Until then, treat its grant as
+potentially account-wide.
+
+The existing skills remain useful because they encode workflows and policy, not
+just transport. Two hand-written skills make creation possible without a laptop,
 a terminal, or an SSH key — a request typed into the **Prompt Shelley** box on a
 phone reaches a VM, and the VM can act. Both work the same way: an exe.dev
 http-proxy integration holds the credential _at the edge_, and the VM sends an
