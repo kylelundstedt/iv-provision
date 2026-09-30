@@ -2,91 +2,116 @@
 title: "IV Development Platform"
 ---
 
-## Status
+## Purpose and status
 
-Draft architecture, recorded 2026-09-20 and revised 2026-09-30.
+This is the target architecture for one Linux development-VM platform that can
+run on either exe.dev or Apple Container. It is a decision document, not a
+provisioning runbook.
 
-The Apple Container portability project exposed a broader design: Industry
-Vault needs one development platform whose compute can run on exe.dev or Apple
-Container without changing the agent environment, access model, or operating
-workflow.
+As of 2026-09-30:
 
-This page describes that platform-neutral architecture. The
-[Apple Container Development VMs](apple-container-dev-vms.md) page describes the
-Apple-specific runtime adapter. Production application VMs remain on exe.dev
-and are outside this redesign.
+- `iv-provision` already manages the exe.dev development fleet.
+- The Apple runtime adapter is designed but not yet at provider parity.
+- Aperture is the planned shared gateway for models, remote MCP, Tailscale tools,
+  and AI-session capture.
+- Production application VMs remain on exe.dev and are outside this redesign.
 
-## Goal
+Apple-specific host and VM details live in
+[Apple Container Development VMs](apple-container-dev-vms.md). Current exe.dev
+provisioning mechanics live in the rest of this repository.
 
-A developer or agent should find the same environment after connecting to a
-development VM on either compute provider:
+## Decisions at a glance
+
+1. **One guest contract, two compute providers.** A development VM should behave
+   the same whether it runs on exe.dev or Apple Container.
+2. **`iv-provision` owns policy.** Provider APIs, CLIs, and MCP servers are
+   transports. They do not own image selection, release pins, enrollment rules,
+   verification, or retirement.
+3. **Tailscale is the common access network.** Every completed development VM is
+   a persistent, tag-owned `tag:dev` node with Tailscale SSH enabled.
+4. **Aperture is the shared gateway.** Ordinary VMs use it for approved remote
+   MCP tools and model traffic. Administrative tools are restricted to the
+   control tier.
+5. **Interactive and unattended paths remain separate.** Native MCP is preferred
+   for attended work; narrowly scoped APIs remain available for automation.
+6. **Credentials are never image content.** OAuth state and provider credentials
+   are created after provisioning and stored only at their intended trust
+   boundary.
+7. **Aperture and Entire have different audit jobs.** Aperture records routed AI
+   activity; Entire records Git-linked authoring provenance.
+
+## Platform contract
+
+A developer or agent should find the following after connecting to a development
+VM on either provider:
 
 - user `exedev`, UID/GID 1000, home `/home/exedev`
 - Ubuntu 24.04 userspace
 - the same shell, PATH, filesystem layout, packages, and systemd services
 - the same pinned IV tools, coding agents, skills, and data locations
 - the same Tailscale hostname, `tag:dev` identity, MagicDNS, and Tailscale SSH
-- the same model and remote MCP endpoints
-- the same centrally captured AI-session record in Aperture
-- the same Git-linked authoring provenance through Entire
-- the same `iv-provision.lock` contract, apart from explicit platform and
+- the same model and common remote-MCP endpoints
+- the same Aperture session-capture policy
+- the same Entire Git-provenance behavior
+- the same `iv-provision.lock` contract, apart from explicit provider and
   architecture fields
 
-“Identical” means behavioral parity, not byte identity. Compute architecture,
-kernel, virtual hardware, boot mechanism, and surrounding provider control
-plane may differ.
+Parity is behavioral, not byte-for-byte. CPU architecture, kernel, boot process,
+virtual hardware, and provider control planes may differ.
 
-## Non-goals
+The platform does **not** attempt to reproduce exe.dev ingress, billing, or its
+complete integration control plane on macOS. It also does not move production
+workloads to Apple Container or turn Aperture into a general service mesh.
 
-- Moving production application workloads from exe.dev to Apple Container
-- Reproducing exe.dev public ingress, TLS termination, authenticated edge,
-  billing, or complete integration control plane on macOS
-- Requiring byte-identical images or binaries across AMD64 and ARM64
-- Turning Aperture into a general service mesh for all VM-to-VM traffic
-- Storing subscription OAuth state or broad provider credentials in images
-
-## Platform architecture
+## System map
 
 ```text
-IV development platform
-├── Management plane
-│   └── iv-provision: desired state, lifecycle, promotion, inventory, parity
-├── Gateway plane
-│   └── Aperture: models, remote MCP, selected APIs, remote execution
-├── Compute plane
-│   ├── exe.dev VMs
-│   └── Apple container machines
-├── Host plane
-│   ├── exe.dev infrastructure
-│   ├── klundstedt-mini
-│   └── klundstedt-mbp
-└── Image and configuration plane
-    ├── exeslim: bootable OCI images
-    └── iv-provision: guest convergence
+Operator or agent
+       |
+       | lifecycle policy
+       v
+iv-provision control tier
+       |
+       | provider adapter
+       +----------------------+----------------------+
+       |                                             |
+       v                                             v
+exe.dev control plane                        Apple Container host
+       |                                             |
+       +------------------ creates VM ---------------+
+                              |
+                              v
+                    pinned iv-provision release
+                              |
+                              v
+                  verified VM, Tailscale tag:dev
+                              |
+                  +-----------+-----------+
+                  |                       |
+                  v                       v
+        local project state       Aperture gateway
+      code, skills, Entire       models, MCP, audit
 ```
 
-Aperture is called the gateway plane rather than only control plane because it
-carries model inference and remote tool traffic as well as administrative tools.
+### Responsibilities
 
-## Ownership boundaries
+| Component                 | Responsibility                                                                                                                 |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `iv-provision` repository | Desired guest state, pinned tools, lifecycle policy, enrollment rules, inventory schema, parity tests, and retirement workflow |
+| `iv-provision` control VM | Executes or coordinates privileged lifecycle operations and scheduled fleet checks                                             |
+| `exeslim`                 | Bootable OCI images and the minimal Ubuntu/systemd baseline                                                                    |
+| exe.dev                   | exe.dev compute, provider lifecycle, authenticated edge access, and provider-specific integrations                             |
+| Apple hosts               | Apple Container compute and host-local services such as LM Studio                                                              |
+| Aperture                  | Shared model gateway, remote MCP catalog, Tailscale/Tailscale SSH tools, grants, and routed-session audit                      |
+| Tailscale                 | Common private network, device identity, access rules, MagicDNS, and SSH policy                                                |
+| Entire                    | Git-linked agent checkpoints and authoring provenance                                                                          |
+| Project repositories      | Project code, tests, instructions, and project-specific skills                                                                 |
+| Dotfiles                  | Minimal physical-Mac configuration and genuinely host-native services                                                          |
 
-| Component | Owns | Does not own |
-| --- | --- | --- |
-| `kylelundstedt/exeslim` | Bootable OCI images, Ubuntu/systemd baseline, `exedev` identity, architecture publication, and thin provider adaptations | Volatile agents, skills, MCP policy, physical host configuration |
-| `kylelundstedt/iv-provision` | Desired guest state, pinned tools, agents, skills, services, lifecycle orchestration, tailnet promotion, inventory, and parity tests | macOS workstation configuration and production application images |
-| `kylelundstedt/dotfiles` | Minimal physical-Mac configuration and genuinely host-native services | The Linux development environment supplied by a VM |
-| Aperture | Model routing, authoritative AI-session captures, remote MCP and HTTP connectors, connector credentials, grants, audit, and selected remote execution | Local skills, VM filesystem tools, Git transport, object-storage signing, guest desired state, Git provenance |
-| Entire | Authoring checkpoints and agent decision context linked to the code and Git history they produced | Fleet request routing, model governance, complete operational request capture |
-| Project repositories | Project instructions, project-specific skills, code, tests, Entire checkpoints, and durable project memory | Fleet-wide machine provisioning |
+## VM lifecycle
 
-## Management plane
-
-`iv-provision` is the existing primary authority for exe.dev lifecycle and the
-target authority and inventory owner for the cross-provider platform. The
-portable `create-dev-vm` workflow described here is planned work; its policy and
-desired-state rules will live in this repository.
-
-The target command should support at least:
+The portable lifecycle is one workflow with provider-specific creation adapters.
+The planned interface is:
 
 ```text
 create-dev-vm --platform exe ...
@@ -94,447 +119,227 @@ create-dev-vm --platform apple --host klundstedt-mini ...
 create-dev-vm --platform apple --host klundstedt-mbp ...
 ```
 
-The provider adapters differ only where the substrate requires it:
+### 1. Create the machine
 
-```text
-create-dev-vm
-├── exe executor
-│   ├── attended: native exe.dev MCP
-│   └── unattended: scoped exe.dev HTTPS API
-└── Apple executor
-    ├── local container CLI
-    └── container CLI over an approved remote path
-```
+| Provider        | Attended path                            | Unattended path                               |
+| --------------- | ---------------------------------------- | --------------------------------------------- |
+| exe.dev         | Native exe.dev MCP                       | Command-scoped exe.dev HTTPS API              |
+| Apple Container | Local container CLI on the selected host | Approved remote worker or host-execution path |
 
-Both paths converge on the same identity, tailnet posture, `iv-provision`
-release, agent configuration, services, and parity checks.
+The native exe.dev MCP offers either full-lobby authority, including SSH into
+all VMs, or authority over one selected VM. Use the one-VM grant for isolated
+work. Reserve the full-lobby grant for explicit fleet administration on a
+trusted control client.
 
-### Native exe.dev MCP
+### 2. Converge the guest
 
-As of 2026-09-30, exe.dev publishes a first-party remote MCP endpoint at
-`https://exe.dev/mcp`. Its documented setup is a user-level client registration
-followed by browser OAuth. That adds a useful **interactive operator adapter** to
-the management plane, but it does not replace either provider execution or guest
-convergence.
+Run a pinned `iv-provision` release inside the new VM. This step installs the
+fleet tools and services, applies agent configuration, and writes
+`~/iv-provision.lock`.
 
-Use it under these boundaries:
+Provider creation success is not platform success. The VM is incomplete until
+convergence and verification pass.
 
-- Register it only on designated operator clients and the `iv-provision` control
-  VM, not on every development VM. At connection time, exe.dev offers either
-  full-lobby authority, including SSH into every VM, or authority over one
-  selected VM. Use the one-VM grant whenever the task is machine-local; treat it
-  as full shell authority over that VM. Reserve the full-lobby grant for explicit
-  fleet administration on the control host.
-- Authenticate after provisioning. Browser OAuth state is mutable user state and
-  must not be baked into an image, committed, copied between VMs, or recorded in
-  `iv-provision.lock`.
-- Prefer it for attended inventory and routine exe.dev lifecycle interaction once
-  the exact tool surface has passed a canary. Keep the scoped HTTPS API
-  integration for unattended jobs, Shelley workflows, and any operation that
-  needs an enforceable `cmds` allowlist.
-- Keep `create-dev-vm` in this repository. MCP may become one executor transport,
-  but image selection, pinned release, bootstrap prompt, enrollment, audit, and
-  parity verification remain policy-bearing orchestration rather than raw
-  provider calls.
+### 3. Enroll it in Tailscale
 
-The one-VM grant is useful for an **external** client that should operate one
-exe.dev VM without seeing the lobby or its siblings. Registering that same grant
-inside the target VM usually adds nothing: a local coding agent already has the
-VM's shell and filesystem. The security boundary belongs on the operator client,
-not inside the machine it controls.
+The final identity is a persistent, tag-owned `tag:dev` node with Tailscale SSH
+enabled.
 
-This is deliberately not a fleet MCP connector. If ordinary agents need a
-control-plane action, expose a reviewed workflow through the control tier rather
-than giving each guest the owner's exe.dev OAuth authority.
+There are two enrollment modes:
 
-## Tailnet identity and enrollment
+- **Attended:** Aperture's Tailscale MCP proposes the node and a person approves
+  it. This is the preferred interactive path when its exact tagging behavior has
+  been qualified.
+- **Unattended:** the existing `api-tailscale` integration mints a narrowly
+  scoped auth key. It remains intentionally incapable of broad device
+  administration.
 
-All development VMs finish as persistent, tag-owned `tag:dev` nodes with
-Tailscale SSH enabled. Provider adapters may differ during bootstrap, but the
-resulting identity and policy posture are part of the platform contract.
+Promotion or retirement must target an immutable device ID, never hostname
+alone. Before applying `tag:dev`, validate the owner, hostname, creation time,
+expected attributes, current tags, and matching lifecycle operation.
 
-`iv-provision` owns any transition from a temporary or user-owned enrollment to
-`tag:dev`, and node retirement as well as creation. Promotion must use an exact
-device ID, never hostname alone. Validate owner, hostname, recent creation time,
-expected node attributes, absence of unexpected tags, and a matching
-in-progress lifecycle operation before applying the tag.
+### 4. Verify and record
 
-[Aperture GA](https://tailscale.com/blog/aperture-ga) added two first-party
-endpoints: **Tailscale** for adding nodes and **Tailscale SSH** for reaching
-them. Tailscale access rules still apply, each machine Aperture proposes to add
-requires explicit approval, and the resulting actions are audited. Aperture
-Projects can also bind instructions, tool access, and selected tailnet nodes.
-This creates an attended, provider-neutral enrollment and execution path that
-should be preferred when a person is present.
+Run the provider-neutral parity suite and record:
 
-It does not yet prove the whole IV lifecycle. Qualify whether the Tailscale MCP
-can apply an exact tag-owner identity, promote an existing node by immutable
-device ID, retire a node, and enforce project node restrictions independently of
-tool visibility. Until those tests pass:
+- provider and host
+- image and architecture
+- `iv-provision` release and lock data
+- immutable Tailscale device identity and tags
+- agent, MCP, model, service, and persistence checks
+- operation result and any required cleanup
 
-- keep the existing `api-tailscale` integration for unattended `auth_keys`
-  bootstrap; it is intentionally insufficient for promotion and must not be
-  widened;
-- defer creating a separate `api-tailscale-provisioner` credential until the
-  native Tailscale MCP's lifecycle gaps are known;
-- keep exact-device validation and the `tag:dev` target posture in
-  `iv-provision`, regardless of which transport performs the mutation.
+A VM that has not passed verification must not be treated as a normal `tag:dev`
+node.
 
-The concrete Apple enrollment sequence is documented by the
-[Apple runtime adapter](apple-container-dev-vms.md#apple-tailnet-enrollment).
+### 5. Operate and retire
 
-## Gateway plane: remote MCP
+Use Tailscale SSH as the normal cross-provider shell path. Retirement removes
+provider compute, Tailscale identity, integration attachments, inventory state,
+and any per-VM credentials as one recorded operation.
 
-Every development VM registers one remote MCP endpoint:
+## Access and tool paths
+
+| Need                             | Preferred path             | Fallback or automation path                 | Boundary                                                |
+| -------------------------------- | -------------------------- | ------------------------------------------- | ------------------------------------------------------- |
+| exe.dev lifecycle                | Native exe.dev MCP         | Scoped exe.dev HTTPS API                    | Full lobby or one VM for MCP; command allowlist for API |
+| exe.dev bootstrap/recovery shell | exe.dev MCP `ssh`          | Owner SSH or scoped HTTPS execution         | Works before Tailscale is healthy                       |
+| Normal VM shell                  | Aperture Tailscale SSH MCP | Direct Tailscale SSH                        | Tailscale access rules are authoritative                |
+| Tailnet enrollment               | Aperture Tailscale MCP     | Scoped `api-tailscale` auth-key integration | Interactive approval versus unattended key minting      |
+| Common SaaS/data tools           | Aperture MCP endpoint      | Explicit direct exception                   | Aperture connector and tool grants                      |
+| VM-local or repository tools     | Direct stdio/local MCP     | None                                        | Local filesystem and process boundary                   |
+
+The two remote-shell paths are intentionally complementary:
+
+- exe.dev SSH is provider-specific and remains useful for bootstrap and recovery;
+- Tailscale SSH is the provider-neutral steady-state path for exe.dev and Apple
+  VMs.
+
+`klundstedt-mbp` does not accept Tailscale SSH. It remains a local executor
+unless a narrow authenticated worker is added deliberately.
+
+## MCP layout
+
+Every ordinary development VM registers one shared Aperture endpoint:
 
 ```text
 http://ai.dojo-sun.ts.net/v1/mcp
 ```
 
-Examples use HTTP because the gateway is tailnet-only and the connection is
-already encrypted by WireGuard; this also matches Aperture's coding-client
-configuration guidance. If the deployed gateway terminates HTTPS reliably, the
-scheme may be upgraded consistently for MCP and model clients without changing
-the architecture.
-
-Aperture is the canonical catalog and credential boundary for
-network-accessible MCP services. It aggregates connectors behind one endpoint,
-injects upstream credentials, prefixes capabilities to avoid collisions, and
-applies connector- or tool-level grants during discovery and invocation.
+The endpoint is HTTP because it is tailnet-only and already protected by
+WireGuard. It can move to HTTPS later without changing the architecture.
 
 ```text
-Claude / Codex / Shelley on every dev VM
-                    |
-                    `-- Aperture /v1/mcp
-                              |-- common: MotherDuck, GitHub, Tigris, Readwise
-                              |-- personal-mcp
-                              `-- control only
-                                    |-- Tailscale
-                                    `-- Tailscale SSH
+ordinary development VM
+       |
+       `-- Aperture
+             |-- common data and SaaS connectors
+             |-- personal connectors where authorized
+             `-- no fleet administration tools
+
+iv-provision control tier
+       |
+       |-- Aperture control project
+       |     |-- Tailscale
+       |     `-- Tailscale SSH
+       `-- direct exe.dev MCP
 ```
 
-Ordinary `tag:dev` VMs receive the common connector set. The `iv-provision`
-control VM should also carry a distinct tag such as `tag:iv-control`, whose
-additional grants expose sensitive administration and fleet connectors,
-including the Tailscale endpoints. Ordinary VMs must not discover those tools.
-
-Use Aperture Projects to narrow control-plane chats further: set explicit tool
-permissions and attach only the tailnet nodes relevant to that project. Projects
-are an authorization and context layer above the network; they do not replace
-Tailscale access rules, which remain the hard connectivity boundary.
-
-The shared endpoint does not erase node identity. Aperture still distinguishes
-callers for audit, revocation, grants, and per-node limits. No upstream MCP
-credential is stored in a development VM.
-
-### Direct MCP exceptions
-
-Keep these registered directly in the VM when required:
-
-- stdio MCP processes
-- project-local tools that need the VM filesystem
-- temporary MCP servers started by a repository
-- tools whose useful scope is one VM rather than the fleet
-- a provider's user-authorized control-plane MCP on its designated control host,
-  such as `https://exe.dev/mcp` on `iv-provision`
-
-A user-authorized provider control plane is not part of the common connector set
-and must not appear on ordinary `tag:dev` VMs. Aperture may expose narrower,
-policy-bearing workflows that use it indirectly, but should not relay the
-owner's raw provider authority to the fleet.
-
-Existing `.int.exe.xyz` MCP URLs are exe.dev edge integrations and generally
-cannot be Aperture upstreams. Migrate each service to its direct upstream, an
-Aperture built-in or verified connector, or a tailnet-accessible relay.
-
-Skills do not move into Aperture. Native skills are local instruction,
-reference, and executable bundles. `iv-provision` owns the fleet guest skill
-manifest and vendored contents; project-specific skills stay in project repos.
-
-## Gateway plane: cloud models
-
-Use Aperture as the common cloud-model endpoint. Aperture passthrough providers
-let the official client retain its subscription OAuth credential while
-inference travels through Aperture for model grants, per-node audit, usage
-reporting, and guardrails. Aperture centralizes path and policy, not the
-subscription credential.
-
-```text
-Claude Code -- Claude Pro/Max OAuth -----> Aperture -----> Anthropic
-Codex ------ ChatGPT subscription OAuth -> Aperture -----> ChatGPT Codex backend
-Shelley ---- managed/API credential ----> Aperture -----> configured API provider
-Local models ---------------------------> Aperture -----> LM Studio on either Mac
-```
-
-### Claude Code
-
-Every VM uses the same base URL:
-
-```json
-{
-  "env": {
-    "ANTHROPIC_BASE_URL": "http://ai.dojo-sun.ts.net"
-  }
-}
-```
-
-Each VM completes `claude /login` with its user's Claude Pro or Max account. Do
-not set `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` on this path. Claude Code
-performs login and refresh directly with Anthropic; inference traverses
-Aperture.
-
-### Codex
-
-Every VM uses the same provider shape:
-
-```toml
-model_provider = "aperture"
-
-[model_providers.aperture]
-name = "Aperture"
-base_url = "http://ai.dojo-sun.ts.net/codex"
-wire_api = "responses"
-requires_openai_auth = true
-```
-
-Each VM signs Codex into the user's ChatGPT Plus, Pro, Team, or Enterprise
-account. Codex performs login and refresh directly with the provider; inference
-traverses Aperture.
-
-### Subscription credential lifecycle
-
-Login state belongs to one VM's persistent home directory. It must not be baked
-into an image, copied from a template, committed, or distributed by
-`iv-provision`. New VMs have a one-time interactive Claude and Codex login step.
-
-Subscription passthrough is limited to the provider's official client. Do not
-route Claude or ChatGPT subscription credentials into Shelley or another
-third-party harness. Shelley uses a centrally configured API-based provider.
-
-### LM Studio providers
-
-Expose each Mac's loopback-only LM Studio instance through a tailnet-only Serve
-path and configure it as a self-hosted OpenAI-compatible Aperture provider:
-
-```text
-lmstudio-mini  -> klundstedt-mini /lmstudio
-lmstudio-mbp   -> klundstedt-mbp  /lmstudio
-```
-
-Enable the API formats LM Studio actually serves, normally OpenAI Chat and
-Responses, and list only approved chat models rather than every embedding model
-returned by `/v1/models`. Use provider-qualified model names initially so a
-request selects its physical host deterministically; do not assume automatic
-health failover merely because two providers expose the same model ID.
-
-This makes Aperture capture local-model prompts, responses, session identity,
-tool-use content, duration, and compatible token usage like any other routed
-inference request. The design is conditional on an end-to-end latency and
-streaming canary: traffic crosses Frankfurt on the way to and from a Mac. Keep a
-documented direct host-local endpoint as a performance or outage break-glass
-path, with the explicit understanding that requests on that path are absent from
-the central Aperture ledger.
-
-## Selected APIs and administrative tools
-
-Aperture HTTP connectors can centralize ordinary REST credentials such as
-bearer tokens, API keys, HTTP Basic, OAuth client credentials, and per-user
-OAuth. Good candidates include Notion, Telnyx, PingOne, and read-only API
-access.
-
-Do not expose broad administrative credentials through a raw connector merely
-because Aperture can proxy them. The first-party exe.dev MCP is an operator path,
-not evidence that the owner's whole control-plane grant belongs behind the
-fleet gateway.
-
-Likewise, do not build a custom control-plane MCP merely to duplicate native
-Tailscale node enrollment, node selection, or SSH execution. First compose the
-first-party tools with local skills and Aperture Projects. Add a narrow custom
-workflow only where it enforces an invariant or atomic cross-provider operation
-that the native tools cannot express, for example:
-
-```text
-ivcontrol_create_dev_vm
-ivcontrol_promote_exact_node
-ivcontrol_retire_dev_vm
-ivcontrol_inventory
-```
-
-Those workflows can run on `iv-provision`, use native MCP tools for attended
-operator calls when they fit, and keep the existing scoped exe.dev and Tailscale
-API credentials for unattended execution. They expose policy-bearing
-operations, not a generic pass-through to either backend. Grant them only to
-`tag:iv-control`.
-
-Aperture does not currently solve every credential path:
-
-- GitHub MCP/API access does not replace Git clone and push authentication.
-- Generic HTTP authentication does not replace S3 Signature Version 4 signing.
-- Aperture identity does not replace provider-specific VM metadata and
-  provenance.
-
-Those paths need explicit portable adapters rather than one broad shared token.
-
-## Remote execution
-
-There are now two first-party remote shell paths, with different jobs:
-
-| Path | Reach | Best use |
-| --- | --- | --- |
-| exe.dev MCP `ssh` | One authorized exe.dev VM, or every VM under a full-lobby grant | Bootstrap and recovery before tailnet enrollment; exe.dev-specific operations |
-| Aperture Tailscale SSH MCP | Nodes reachable from Aperture under Tailscale access rules and project/tool grants | Provider-neutral steady-state operation across exe.dev and Apple VMs |
-
-Aperture's Tailscale SSH endpoint can list eligible nodes and run audited shell
-commands. It is the candidate common execution path for `iv-provision`, exe.dev
-development VMs, Apple VMs, and `klundstedt-mini`. The exe.dev SSH path remains a
-valuable bootstrap and break-glass route because it does not depend on the guest
-already being healthy on the tailnet.
-
-Grant command execution narrowly. The connector acts as the Aperture node and
-is bounded by the tailnet SSH policy; Projects should further limit visible
-nodes and enabled tools. Long-running lifecycle work should start a supervised
-detached job rather than depend on one interactive command session.
-
-`klundstedt-mbp` uses the standard Tailscale app and does not accept Tailscale
-SSH. It remains a local executor unless a narrow authenticated worker service is
-added deliberately.
-
-## AI-session ledger and Git provenance
-
-Aperture is the authoritative centralized AI-session ledger. For every routed
-LLM request it can retain and export identity, node ID and tags, full request
-and response bodies, redacted headers, model, token classes, duration, tool-use
-details, and the native Claude or Codex session identifier. Configure nonzero
-capture retention and S3-compatible export with `require_export` before retiring
-an existing archive.
-
-Entire remains the authoritative Git-linked provenance layer. It records agent
-decision context and checkpoints with the repository and code they produced,
-which Aperture's request log does not do. Retain:
-
-- the Entire CLI and Git checkpoint backend
-- `entire-agent-shelley`
-- native Claude and Codex Entire integrations where supported
-- `entire-push-check`
-- checkpoint refs pushed with their repositories
-
-Where possible, record the same native agent session identifier in Entire
-metadata that Aperture exports as `session_id`. Verify identifier equivalence for
-Claude, Codex, and Shelley before making that cross-link part of the contract.
-
-AgentsView is retired from the target platform rather than migrated. After a
-side-by-side capture canary and archive preservation, remove:
-
-- the `iv-agentsview` central collector
-- per-VM AgentsView binaries and source daemons
-- `av-src-*` exe.dev integrations and fleet sync tokens
-- the AgentsView MCP endpoint
-- `entire-agent-agentsview`
-- AgentsView provisioning, monitoring, backup, and retirement steps
-
-This deliberately gives up AgentsView-specific semantic recall, secret scans,
-Git outcome analytics, and normalized local harness archives. Aperture's full
-capture/export plus Entire's Git provenance are the chosen replacement. Direct
-LM Studio or other break-glass inference that bypasses Aperture is an explicit
-logging gap, while Entire can still retain code-linked authoring context.
-
-Ordinary persistent VM-to-VM service traffic continues to belong directly on
-the tailnet rather than through Aperture.
-
-## High availability and failure boundaries
-
-Lifecycle logic should not require one interactive workstation. Provider
-executors should support local operation and at least one remotely reachable
-worker where the substrate permits it. The Apple host topology and its deliberate
-Tailscale differences are documented by the
-[Apple runtime adapter](apple-container-dev-vms.md#host-roles).
-
-There are separate availability levels:
-
-1. Provider-local VM creation and initial Aperture enrollment should survive loss
-   of the central control VM where practical. An Apple VM may remain temporarily
-   user-owned in this degraded state; it is not parity-complete and must not be
-   treated as `tag:dev` until promotion succeeds.
-2. Promotion to `tag:dev` initially depends on the privileged authority on
-   `iv-provision` and resumes when that authority returns.
-3. Remote MCP and cloud-model governance depend on Aperture in Frankfurt.
-4. Local repositories, skills, agents, VM-local MCP, and host-local models must
-   continue working during an Aperture outage.
-
-Preserve documented break-glass direct paths for genuinely critical remote
-services. If a secondary promotion credential is added to a Mac, use an
-independent credential for audit and revocation; `devices:core` has broad blast
-radius.
-
-## Implementation plan
-
-### 1. Define the platform contract
-
-Create machine-readable parity checks for identity, filesystem layout, OS,
-services, pinned tools, agents, skills, model/MCP configuration, tailnet state,
-and persistence. Keep an explicit allowlist for intended provider differences.
-
-### 2. Implement portable lifecycle orchestration
-
-Create one `create-dev-vm` workflow with exe.dev and Apple executors. Record
-operations, resulting inventory, image/provisioner provenance, and verification
-results in one format.
-
-### 3. Implement enrollment and promotion
-
-Qualify Aperture's native Tailscale and Tailscale SSH MCP endpoints: node-add
-approval, exact device identity, `tag:dev` assignment or promotion, project node
-restrictions, access-rule enforcement, audited SSH, and retirement. Add a
-dedicated API promotion credential on `iv-provision` only for lifecycle
-operations the native endpoint cannot perform safely.
-
-### 4. Centralize remote MCP and models
-
-Register one Aperture MCP endpoint in Claude, Codex, and Shelley for the common
-fleet connector set. Separately qualify and register the native exe.dev MCP on
-`iv-provision` only. Configure common and control-plane connector grants,
-Claude and Codex subscription passthrough, API-based Shelley providers, both LM
-Studio hosts, full-capture retention, S3 export with `require_export`, and the
-one-time login runbook.
-
-### 5. Consolidate credentials and agent configuration
-
-Move fleet guest instructions, skills, settings, and common remote MCP
-registration under `iv-provision`. Reduce dotfiles to the physical-host role.
-Keep user-authorized provider MCP state on designated control hosts, and expose
-narrow cross-provider workflows rather than raw administrative pass-throughs.
-
-### 6. Retire AgentsView and preserve Entire provenance
-
-Run representative Claude, Codex, Shelley, MCP, and LM Studio sessions through
-Aperture and compare its retained/S3-exported captures with the existing
-AgentsView archive. Preserve the historical archive, remove the collector,
-source daemons, integrations, MCP endpoint, and AgentsView adapter, and keep the
-Entire checkpoint path and scheduled push verification. Update VM creation,
-provisioning, monitoring, backup, and retirement runbooks in the same migration.
-
-### 7. Add inventory, audit, and availability behavior
-
-Define authoritative inventory, operation logs, retry/idempotency rules,
-break-glass paths, and promotion failover. State which component owns deletion
-and credential revocation.
-
-### 8. Continuously test provider parity
-
-Run the same suite against exe.dev and Apple canaries, including real model and
-MCP calls, Tailscale SSH, service health, and stop/start persistence.
+The control project is available only to the `iv-provision` control identity,
+preferably enforced with a distinct caller tag such as `tag:iv-control`.
+Aperture Projects should restrict both tools and relevant tailnet nodes. Projects
+are an additional control layer; Tailscale access rules remain the hard network
+boundary.
+
+Current `.int.exe.xyz` MCP URLs are exe.dev edge integrations, not portable
+Aperture upstreams. Migrate each service to its direct upstream, an Aperture
+built-in, or a tailnet-accessible relay. The common catalog is expected to cover
+services such as MotherDuck, GitHub, Tigris, and Readwise, but the final catalog
+remains an explicit deployment decision.
+
+Direct MCP registration is reserved for:
+
+- stdio or repository-local tools
+- temporary MCP servers started by a project
+- tools that require the local filesystem
+- a provider control plane on its designated operator client, such as the
+  exe.dev MCP on `iv-provision`
+
+Do not place full exe.dev lobby authority or Tailscale administration tools in
+the common fleet connector set. Do not build a custom MCP merely to duplicate
+native node enrollment or SSH. Add a narrow IV workflow only when it enforces a
+cross-provider invariant the native tools cannot express.
+
+## Credential placement
+
+| Credential or state                 | Location                                                       | Rule                                                                         |
+| ----------------------------------- | -------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| exe.dev MCP OAuth                   | Designated operator client                                     | One-VM grant by default; full lobby only for deliberate fleet administration |
+| exe.dev HTTPS token                 | exe.dev edge integration or protected control-host state       | Short-lived and command-scoped for unattended work                           |
+| Tailscale auth-key authority        | exe.dev edge integration or protected control-host state       | Keep unattended bootstrap narrow; do not widen the shared integration        |
+| Aperture connector credentials      | Aperture                                                       | Never distribute upstream credentials to ordinary VMs                        |
+| Claude and Codex subscription OAuth | Individual VM user's persistent home                           | Interactive login after provisioning; never bake or copy                     |
+| Shelley model credential            | Aperture-managed API provider                                  | Do not reuse subscription OAuth in a third-party harness                     |
+| Git transport credentials           | Provider-specific Git integration or approved portable adapter | MCP/API access does not replace clone and push authentication                |
+| Object-storage credentials          | Signed or short-lived storage-specific path                    | Generic HTTP proxying does not replace S3 signing                            |
+
+No OAuth database, broad provider token, or connector secret belongs in an OCI
+image, Git repository, copied home directory, or `iv-provision.lock`.
+
+## Models and agent sessions
+
+Aperture is the common model endpoint:
+
+- Claude Code and Codex retain their official subscription login state in the
+  VM while inference traverses Aperture.
+- Shelley uses an API-based provider configured through Aperture.
+- LM Studio on either Mac is exposed through a tailnet-only path and registered
+  as an approved self-hosted provider.
+
+Provider-qualified LM Studio model names should be used until health and failover
+behavior are proven. Frankfurt latency and streaming quality must pass a canary
+before local models depend on this route. A direct host-local endpoint remains a
+performance and outage fallback, with the explicit cost that those requests are
+not present in Aperture's central log.
+
+Aperture is the authoritative record for routed AI requests, tool calls, model
+usage, and session identity. Entire remains authoritative for decision context
+and checkpoints linked to Git history. Where possible, both systems should store
+the same native agent session identifier.
+
+AgentsView can be retired only after nonzero Aperture retention and required
+S3-compatible export are enabled, representative Claude, Codex, Shelley,
+remote-MCP, and local-model sessions have been compared against the exported
+records, and the historical archive has been preserved.
+
+## Failure behavior
+
+- Loss of `iv-provision` pauses privileged promotion and coordinated retirement,
+  but should not stop already-provisioned VMs.
+- Loss of Aperture removes shared remote MCP, model governance, and central
+  routed-session logging. Local repositories, local skills, direct provider
+  recovery paths, and explicitly documented local-model fallbacks continue.
+- Loss of Tailscale removes the common steady-state access path. exe.dev edge SSH
+  remains available for exe.dev bootstrap and recovery.
+- An Apple VM may exist temporarily with a user-owned Tailscale identity during a
+  control-plane outage, but it is not parity-complete and must not be treated as
+  `tag:dev`.
+
+Break-glass credentials must be independent, narrowly scoped, documented, and
+revocable. Persistent VM-to-VM application traffic stays directly on the
+tailnet rather than traversing Aperture.
+
+## Implementation sequence
+
+1. **Define the machine-readable contract.** Specify inventory, lock fields,
+   parity checks, lifecycle states, and allowed provider differences.
+2. **Build `create-dev-vm`.** Implement exe.dev and Apple creation adapters,
+   pinned convergence, idempotent verification, and recorded cleanup.
+3. **Qualify the native control tools.** Test exe.dev full-lobby and one-VM
+   grants; test Tailscale node approval, immutable identity, tag assignment,
+   retirement, project restrictions, audited SSH, and long-running commands.
+4. **Deploy the shared gateway contract.** Register the common Aperture MCP and
+   model endpoints; restrict Tailscale administration to the control project;
+   document one-time user logins.
+5. **Complete credential portability.** Define Git clone/push and object-storage
+   signing paths without broad secrets in guests.
+6. **Prove audit replacement.** Validate Aperture export and Entire correlation,
+   preserve the AgentsView archive, then remove AgentsView-specific services and
+   integrations.
+7. **Test failure and parity continuously.** Exercise both providers, both shell
+   paths, stop/start persistence, provider outages, Aperture outages, and
+   retirement.
 
 ## Open decisions
 
-- Exact command and state format for `create-dev-vm`
-- Whether the native Tailscale MCP can assign or promote exact device IDs to
-  `tag:dev`, retire nodes, and eliminate a separate `devices:core` credential
-- How personal OAuth connectors authorize tag-owned development VMs
-- Which services require direct break-glass paths
-- Whether Frankfurt latency is acceptable for both LM Studio hosts
-- Whether Entire and Aperture expose identical Claude, Codex, and Shelley
-  session identifiers for durable cross-linking
-- Portable Git clone/push credential design
-- Portable S3 signing and short-lived credential design
-- Authentication and URL shape for Apple-hosted Shelley
-- Authoritative inventory format and backup location
+- Exact inventory schema and lifecycle-state format
+- Whether Tailscale MCP can assign or promote an exact device to `tag:dev` and
+  retire it safely
+- Which native-tool gaps require narrow IV control workflows
+- Portable Git clone/push authentication
+- Portable S3-compatible signing and short-lived credentials
+- Apple remote-worker design, especially for `klundstedt-mbp`
+- Common versus personal Aperture connector catalog
+- LM Studio latency, streaming, and failover behavior through Frankfurt
+- Session-ID equivalence across Aperture, Claude, Codex, Shelley, and Entire
+- Authoritative backup location for inventory and audit exports
