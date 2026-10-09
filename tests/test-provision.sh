@@ -117,6 +117,15 @@ grep -q 'MERGE the team Claude settings' "$script" || {
 }
 grep -q 'SHELLEY_SKIP_VERSION_CHECK=true' "$script"
 
+# Shelley stays fleet-pinned, but upstream drift must not be invisible again.
+# The scheduled checker alerts through one maintained issue; it does not install
+# anything and therefore cannot become a second desired-state authority.
+shelley_check="$repo/.github/workflows/shelley-release-check.yml"
+[[ -f $shelley_check ]]
+grep -q 'aifoundry-org.github.io/shelley/release.json' "$shelley_check"
+grep -q '^  issues: write$' "$shelley_check"
+grep -q 'Keep.*SHELLEY_SKIP_VERSION_CHECK=true' "$shelley_check"
+
 # The restart decision must read systemd's MainPID, not `pgrep`. shelley.service
 # uses KillMode=process, so terminal helpers -- also named "shelley" -- survive a
 # restart, predate the drop-in and sort first by PID, which made the check report

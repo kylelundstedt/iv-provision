@@ -27,6 +27,13 @@ validation suite, test provisioning on a disposable VM, then
 commit and tag the revision. The provisioner checks installed versions and
 upgrades mismatches when it is re-run.
 
+Shelley is deliberately included in that controlled path rather than allowed to
+self-update independently on every VM. `.github/workflows/shelley-release-check.yml`
+compares the pin with Shelley's published release every Monday and maintains one
+open GitHub issue when it drifts. Treat the issue as a prompt to review, canary,
+and cut a release—not as permission to replace `SHELLEY_SKIP_VERSION_CHECK=true`
+with a floating install.
+
 ```bash
 cd ~/iv-provision
 $EDITOR provision-iv.sh
