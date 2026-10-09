@@ -1,0 +1,100 @@
+name: Shelley release check
+
+# Shelley remains an exact, checksum-verified fleet pin. Discover upstream drift
+# automatically, but keep installation behind review, canarying, and a tagged
+# iv-provision release rather than giving every VM an independent updater.
+on:
+  schedule:
+    - cron: '17 15 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Compare the fleet pin with Shelley's published release
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          current=$(sed -nE 's/^SHELLEY_VERSION=//p' provision-iv.sh)
+          release=$(curl -fsSL --max-time 60 --retry 3 --retry-all-errors \
+            https://aifoundry-org.github.io/shelley/release.json)
+          latest=$(jq -er .version <<<"$release")
+          tag=$(jq -er .tag_name <<<"$release")
+          commit=$(jq -er .commit_full <<<"$release")
+          published=$(jq -er .published_at <<<"$release")
+
+          {
+            echo "current=$current"
+            echo "latest=$latest"
+            echo "tag=$tag"
+            echo "commit=$commit"
+            echo "published=$published"
+            if [[ $current == "$latest" ]]; then
+              echo 'outdated=false'
+            else
+              echo 'outdated=true'
+            fi
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Open, refresh, or close the drift issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CURRENT: ${{ steps.release.outputs.current }}
+          LATEST: ${{ steps.release.outputs.latest }}
+          LATEST_TAG: ${{ steps.release.outputs.tag }}
+          LATEST_COMMIT: ${{ steps.release.outputs.commit }}
+          PUBLISHED: ${{ steps.release.outputs.published }}
+          OUTDATED: ${{ steps.release.outputs.outdated }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          title='Shelley fleet pin is behind the published release'
+          issue=$(
+            gh api --paginate "repos/$GITHUB_REPOSITORY/issues?state=open&per_page=100" \
+              | jq -rs --arg title "$title" \
+                '[.[][] | select(.pull_request == null and .title == $title)][0].number // empty'
+          )
+
+          if [[ $OUTDATED == false ]]; then
+            if [[ -n $issue ]]; then
+              gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/$issue" \
+                -f state=closed \
+                -f body="The fleet pin now matches Shelley ${LATEST_TAG}. Closed automatically."
+            fi
+            exit 0
+          fi
+
+          body=$(cat <<EOF
+          The weekly release check found a newer published Shelley build.
+
+          | | Version |
+          | --- | --- |
+          | Fleet pin | \`${CURRENT}\` |
+          | Published | \`${LATEST_TAG}\` |
+          | Commit | \`${LATEST_COMMIT}\` |
+          | Published at | \`${PUBLISHED}\` |
+
+          Keep \`SHELLEY_SKIP_VERSION_CHECK=true\`. Review the upstream changes,
+          update the version/commit/checksum pins in \`provision-iv.sh\`, run the
+          local suite, canary the exact iv-provision commit, then cut and roll out
+          a tagged release.
+          EOF
+          )
+
+          if [[ -n $issue ]]; then
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/$issue" \
+              -f state=open -f body="$body"
+          else
+            gh api --method POST "repos/$GITHUB_REPOSITORY/issues" \
+              -f title="$title" -f body="$body"
+          fi
