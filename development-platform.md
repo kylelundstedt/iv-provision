@@ -235,6 +235,27 @@ Each VM signs Codex into the user's ChatGPT Plus, Pro, Team, or Enterprise
 account. Codex performs login and refresh directly with the provider; inference
 traverses Aperture.
 
+### Bypass when Aperture is down
+
+Aperture holds no credential on this path: each client sends its own
+subscription login and Aperture forwards it. So when the gateway is unreachable,
+the same client and login can go straight to the provider for that run, with
+nothing changed on disk:
+
+```bash
+# Claude Code, direct to Anthropic
+claude --settings '{"env":{"ANTHROPIC_BASE_URL":"https://api.anthropic.com"}}'
+
+# Codex, direct to OpenAI (its built-in provider)
+codex -c model_provider=openai
+```
+
+Both verified 2026-10-10. Bypassed calls do not appear in Aperture's logs. The
+configs are identical on every VM and Mac, so this works wherever the CLI is
+logged in. Local models are not the fallback: they help only when the providers
+are unreachable, which usually means the network is too, and they are much
+weaker than the models they would replace.
+
 ### Subscription credential lifecycle
 
 Login state belongs to one VM's persistent home directory. It must not be baked
