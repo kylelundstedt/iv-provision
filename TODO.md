@@ -9,21 +9,25 @@ Claude Code and Codex on every VM route through `http://aperture.dojo-sun.ts.net
 on their own subscription logins. The modified Shelley stays on its own
 subscription logins, outside Aperture, for now. Gates, in order:
 
-- [ ] **Tailnet policy:** grant `tag:dev` network access to the Aperture node
-      (`tcp:80`, `tcp:443`, `icmp:*` per Aperture's docs). On 2026-10-10 the name
-      resolved from `iv-agentsview` (`tag:dev`) but every request timed out,
-      while the same URL answered from Kyle's Mac. The node is untagged and
-      user-owned, so target it with a `hosts` alias (`"aperture": "100.126.54.92"`)
-      rather than tagging it: tagging would change how Kyle's own devices reach
-      it. This credential cannot make the edit (`GET /acl` is 403 by design), so
-      it is a console change.
-- [ ] **Aperture grant (check only):** Aperture's default config grants
-      `role: user` and `models: "**"` to `src: ["*"]`. If that default is still
-      in place at `/admin/settings/grants`, `tag:dev` needs nothing more; if it
-      was narrowed, add a `tag:dev` grant.
-- [ ] **Canary on one VM:** provision from the branch, `codex login --device-auth`,
-      confirm `claude` and `codex` both answer and both appear in Aperture's
-      session log under the VM's identity.
+- [x] ~~**Tailnet policy**~~ done 2026-10-10: `hosts` alias `aperture`
+      (100.126.54.92) plus a `tcp:80` grant from `tag:dev` and `tag:mini`, with
+      policy tests. Probed from `iv-agentsview`: root `302`, `/v1/models` lists
+      the subscription models, and an unauthenticated `/v1/messages` gets
+      Anthropic's own `401`, so passthrough works. Aperture's default `src: ["*"]`
+      grant covers `tag:dev`; no Aperture-side change was needed.
+- [ ] **Canary on `iv-cli` (in progress 2026-10-10):** provisioned from the
+      branch, smoke passed, both configs in place. Codex logged in via
+      `--device-auth` and answered through Aperture. Claude Code login pending.
+      Findings:
+  - iv-cli had **no Claude Code login** at all, so "already logged in per VM"
+    is false; plan both logins on every VM.
+  - **Bump `CODEX_VERSION` before release.** The 0.146.0 pin predates
+    `gpt-6.1-sol` ("Model metadata ... not found. Defaulting to fallback
+    metadata"). Codex 0.162.1 on the Mac has no such warning.
+  - `/codex/models` returns 404 through Aperture on the Mac too; harmless, since
+    prompts still work.
+  - The installed `upgrade-vm` skill still uses `~/iv-image` paths; fix it
+    before the fleet run.
 - [ ] **Release + fleet:** tag, then `upgrade-vm` each VM. Codex breaks on a VM
       until its one-time `codex login --device-auth`; Claude Code is already
       logged in per VM. Recreated VMs need both logins again.
