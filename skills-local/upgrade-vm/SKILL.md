@@ -172,6 +172,18 @@ hit the same model errors when behind. Once the fleet is done, on each Mac
 cd ~/dotfiles && git pull --ff-only && ./install.sh --upgrade
 ```
 
+The mini can be done remotely. Its port 22 is open only to `tag:dev`, so go
+through a dev VM; with no terminal, `install.sh` skips 1Password and the
+Keychain secret refresh and runs everything else (dotfiles 2026-10-10; a plain
+remote run was verified that day, `--upgrade` not yet):
+
+```bash
+ssh exedev@<dev-vm> 'ssh klundstedt@klundstedt-mini "cd ~/dotfiles && git pull --ff-only && ./install.sh --upgrade"'
+```
+
+A Claude Code `/login` and the secret refresh still need a run at the mini's own
+terminal: its login Keychain is locked to SSH sessions.
+
 ## Path B — Full destroy + recreate (only when required)
 
 This **wipes the VM's local disk** — it reprovisions, it does not migrate state.
