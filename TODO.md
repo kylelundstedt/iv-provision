@@ -17,7 +17,7 @@ subscription logins, outside Aperture, for now. Gates, in order:
       grant covers `tag:dev`; no Aperture-side change was needed.
 - [x] ~~**Canary on `iv-cli`**~~ passed 2026-10-10 at `a7797d8`: provision and
       smoke clean, both configs in place, both CLIs logged in (`codex login
-  --device-auth`; `claude` → `/login`) and answering through Aperture with
+--device-auth`; `claude` → `/login`) and answering through Aperture with
       no model override — Claude Code 2.1.296 → `claude-opus-5-5`, Codex 0.162.1
       → `gpt-6.1-sol`. Findings:
   - The pins were bumped (Claude Code 2.1.220 → 2.1.296, Codex 0.146.0 →
@@ -33,12 +33,19 @@ subscription logins, outside Aperture, for now. Gates, in order:
   - The dotfiles copy of `upgrade-vm` was on `~/iv-image` paths; synced to this
     repo's copy (dotfiles #71), which now has the one-time login step
     (`4347d12`).
-- [ ] **Confirm in Aperture's dashboard** that iv-cli's sessions (2026-10-10
-      ~02:28–02:38 UTC) appear under the `iv-cli` identity (needs an admin).
-- [ ] **Release + fleet:** tag, then `upgrade-vm` each VM. Codex breaks on a VM
-      until its one-time `codex login --device-auth`, and Claude Code until
-      `claude` → `/login` (not every VM has one; iv-cli did not). Recreated VMs
-      need both logins again.
+- [x] ~~**Aperture dashboard**~~ confirmed 2026-10-10: iv-cli's test calls
+      appear in Aperture's logs. Tagged devices are identified by **tag**
+      (`tag:dev`), not hostname, so the User column cannot tell VMs apart and a
+      `<user>` quota would be one bucket for the whole fleet; check the per-node
+      detail before setting quotas.
+- [x] ~~**Release + fleet**~~ done 2026-10-10: `3.1.0` tagged on `908bbd5`; all
+      17 provisioned `tag:dev` VMs upgraded in place (provision and smoke clean,
+      no Shelley restarts). kgl-songs and iv-telnyx-vm went last, individually,
+      with running services, listening ports and HTTP status identical before and
+      after. Logins are deferred to first use: no fleet job calls `claude` or
+      `codex` unattended, and an unlogged VM fails clearly (`Not logged in` /
+      `401`). Not covered: `iv-agentsview` (no iv-provision checkout) and the
+      prod lane (not provisioned by this recipe).
 
 ## Decouple from the personal dotfiles repo
 
