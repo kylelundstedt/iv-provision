@@ -1,6 +1,7 @@
 {
   "env": {
-    "DISABLE_NON_ESSENTIAL_MODEL_CALLS": "1"
+    "DISABLE_NON_ESSENTIAL_MODEL_CALLS": "1",
+    "ANTHROPIC_BASE_URL": "http://aperture.dojo-sun.ts.net"
   },
   "hooks": {
     "PreToolUse": [

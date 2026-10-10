@@ -68,6 +68,8 @@ test -x "$HOME/.agents/ssh-guard.sh"
 test -f "$HOME/.agents/AGENTS.md"
 test -f "$HOME/.claude/settings.json"
 test -f "$HOME/.codex/config.toml"
+# Codex >= 0.16x needs its Code Mode host next to it, or Code Mode fails closed.
+test -x "$HOME/.local/bin/codex-code-mode-host"
 test -f "$HOME/.claude.json"
 test -f "$HOME/.agents/iv-team-skills.list"
 test -f "$HOME/.config/systemd/user/agentsview-source.service"

@@ -1,15 +1,19 @@
-# Codex default model + provider for iv-image VMs.
+# Codex default model + provider for iv-provision VMs.
 #
-# exe.dev's LLM integration exposes the org's configured provider
-# (e.g. a ChatGPT Business subscription) behind an OpenAI-compatible
-# endpoint at llm.int.exe.xyz. The VM's network identity authenticates
-# to the int.exe.xyz proxy, so no API key is configured here.
+# All Codex traffic goes through the Aperture gateway on the tailnet
+# (development-platform.md, "Gateway plane: cloud models"). Aperture is a
+# passthrough here: Codex keeps the user's own ChatGPT login (one-time
+# `codex login --device-auth` per VM) and Aperture authorizes the request by
+# the VM's Tailscale identity, then forwards it to the ChatGPT Codex backend.
+# No API key is configured.
 #
-# This makes plain `codex` route to exe-llm. To use a different
-# provider/model ad hoc, override with `-c model_provider=...`.
-model = "gpt-5.5"
-model_provider = "exe-llm"
+# Requires: the VM on the tailnet as tag:dev, a tailnet grant from tag:dev to
+# the Aperture node, and an Aperture grant (role user) for tag:dev.
+model = "gpt-6.1-sol"
+model_provider = "aperture"
 
-[model_providers.exe-llm]
-name = "exe-llm"
-base_url = "https://llm.int.exe.xyz/v1"
+[model_providers.aperture]
+name = "Aperture"
+base_url = "http://aperture.dojo-sun.ts.net/codex"
+wire_api = "responses"
+requires_openai_auth = true

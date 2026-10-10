@@ -103,6 +103,36 @@ Also check `~/iv-provision.lock` after each VM: `python3_version`,
 `tailscale_version`, `entire_version`, `entire_plugin_version` and
 `skills_count` should all be populated.
 
+### Log in Claude Code and Codex once (Aperture releases)
+
+From the Aperture release on, both CLIs route through
+`http://aperture.dojo-sun.ts.net` on the VM's **own** subscription logins, so a
+VM without them fails: Codex with `401 Unauthorized` from
+`.../codex/responses`, Claude Code with `Not logged in`. Logins live in the
+home directory, so they survive later in-place upgrades; a recreated VM (Path B)
+needs them again. Check first:
+
+```bash
+ssh <vm> "ls ~/.codex/auth.json ~/.claude/.credentials.json"
+```
+
+For each missing one, the owner approves in a browser:
+
+- **Codex:** `ssh <vm> 'codex login --device-auth'` prints a URL and a one-time
+  code; approve it at `https://auth.openai.com/codex/device`.
+- **Claude Code:** interactive only: `ssh <vm>`, run `claude`, then `/login`.
+
+Then confirm both answer through the gateway with no model override:
+
+```bash
+ssh <vm> 'cd /tmp && claude -p "Reply with exactly: ok" \
+  && codex exec --skip-git-repo-check "Reply with exactly: ok"'
+```
+
+A model error here (e.g. `claude-opus-5[1m]` "may not exist") means the CLI's
+default model is not on Aperture's provider list: the pins are behind the
+gateway. Do not work around it per VM; bump the pins.
+
 ### Do production VMs last
 
 VMs running services others depend on (kgl-songs, telnyx-vm) go **last and

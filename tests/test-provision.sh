@@ -42,6 +42,7 @@ required=(
   CLAUDE_CODE_VERSION CODEX_VERSION UV_VERSION
   CLAUDE_CODE_SHA256_AMD64 CLAUDE_CODE_SHA256_ARM64
   CODEX_SHA256_AMD64 CODEX_SHA256_ARM64
+  CODEX_CODE_MODE_HOST_SHA256_AMD64 CODEX_CODE_MODE_HOST_SHA256_ARM64
   UV_SHA256_AMD64 UV_SHA256_ARM64
 )
 
@@ -323,5 +324,17 @@ if ! diff -q <(tail -n +2 "$repo/bin/render-md-site") \
              <(tail -n +2 "$shebang_dir/render-md-site") >/dev/null; then
   echo "shebang rewrite altered the script body" >&2; exit 1
 fi
+
+# Claude Code and Codex must both point at the same Aperture gateway: one
+# endpoint for the whole fleet (development-platform.md). A drift between the two
+# files would send one client somewhere else with no error until it is used.
+claude_base=$(jq -r '.env.ANTHROPIC_BASE_URL // empty' "$repo/agent/settings.json")
+codex_base=$(awk -F'"' '/^base_url[[:space:]]*=/ {print $2; exit}' "$repo/agent/codex-config.toml")
+[[ $claude_base == http://aperture.* ]] || {
+  echo "agent/settings.json ANTHROPIC_BASE_URL is not Aperture: '$claude_base'" >&2; exit 1; }
+[[ $codex_base == "$claude_base/codex" ]] || {
+  echo "codex base_url '$codex_base' != '$claude_base/codex'" >&2; exit 1; }
+grep -qx 'model_provider = "aperture"' "$repo/agent/codex-config.toml" || {
+  echo "agent/codex-config.toml does not default to the aperture provider" >&2; exit 1; }
 
 printf '%s\n' 'provision script tests passed'

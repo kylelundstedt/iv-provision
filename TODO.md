@@ -3,6 +3,43 @@
 Open work only. Release history → the table in `index.qmd`. Historical
 research (custom-image / arm64 era) → `registry.md`.
 
+## Aperture gateway rollout (branch `feat/aperture-gateway`)
+
+Claude Code and Codex on every VM route through `http://aperture.dojo-sun.ts.net`
+on their own subscription logins. The modified Shelley stays on its own
+subscription logins, outside Aperture, for now. Gates, in order:
+
+- [x] ~~**Tailnet policy**~~ done 2026-10-10: `hosts` alias `aperture`
+      (100.126.54.92) plus a `tcp:80` grant from `tag:dev` and `tag:mini`, with
+      policy tests. Probed from `iv-agentsview`: root `302`, `/v1/models` lists
+      the subscription models, and an unauthenticated `/v1/messages` gets
+      Anthropic's own `401`, so passthrough works. Aperture's default `src: ["*"]`
+      grant covers `tag:dev`; no Aperture-side change was needed.
+- [x] ~~**Canary on `iv-cli`**~~ passed 2026-10-10 at `a7797d8`: provision and
+      smoke clean, both configs in place, both CLIs logged in (`codex login
+  --device-auth`; `claude` → `/login`) and answering through Aperture with
+      no model override — Claude Code 2.1.296 → `claude-opus-5-5`, Codex 0.162.1
+      → `gpt-6.1-sol`. Findings:
+  - The pins were bumped (Claude Code 2.1.220 → 2.1.296, Codex 0.146.0 →
+    0.162.1) because the old ones broke on Aperture: 2.1.220 defaults to
+    `claude-opus-5[1m]`, which Aperture's subscription provider does not list,
+    and 0.146.0 has no metadata for `gpt-6.1-sol`. Aperture's provider model
+    list is an allowlist, so pins must move when the model list does.
+  - iv-cli had **no Claude Code login** at all; plan both logins on every VM.
+  - `/codex/models` returns 404 through Aperture on the Mac too; harmless.
+  - Codex 0.162.1 warned that `codex-code-mode-host` was missing (Code Mode
+    off). Fixed in `02f9107`: installed from the same pinned release, smoke
+    asserts it; re-tested on iv-cli, warning gone.
+  - The dotfiles copy of `upgrade-vm` was on `~/iv-image` paths; synced to this
+    repo's copy (dotfiles #71), which now has the one-time login step
+    (`4347d12`).
+- [ ] **Confirm in Aperture's dashboard** that iv-cli's sessions (2026-10-10
+      ~02:28–02:38 UTC) appear under the `iv-cli` identity (needs an admin).
+- [ ] **Release + fleet:** tag, then `upgrade-vm` each VM. Codex breaks on a VM
+      until its one-time `codex login --device-auth`, and Claude Code until
+      `claude` → `/login` (not every VM has one; iv-cli did not). Recreated VMs
+      need both logins again.
+
 ## Decouple from the personal dotfiles repo
 
 The team layer must stand alone: a fleet VM should provision fully without
@@ -57,7 +94,7 @@ macOS-only and part of the auditing control plane rather than the audited VMs.
 What remains:
 
 - [x] ~~Enroll `ave-adapters` in Entire ACR capture.~~ Done: `ff5cc95 chore:
-    enable Entire Shelley capture` (2026-08-18) is on `origin/main`, settings
+enable Entire Shelley capture` (2026-08-18) is on `origin/main`, settings
       byte-identical to `fannie-sflpd`/`iv-docs` (git-branch backend, telemetry
       off, external agents on), tracking only `.entire/settings.json` and
       `.entire/.gitignore` so all nine worktrees and future clones inherit it.
@@ -81,7 +118,7 @@ What remains:
       metadata byte-identical (`full.jsonl`/`metadata.json`/`prompt.txt`/
       `transcript.jsonl`). Storage moves to `refs/entire/checkpoints/<shard>/<id>`,
       **outside** `refs/heads/*`; propagation is the backend-aware `entire hooks
-    git pre-push` hook, not a push refspec. So the plugin side is cheap. The
+git pre-push` hook, not a push refspec. So the plugin side is cheap. The
       cost is elsewhere, and is why this is not a flag flip: 1. **Qualify `refs` against 0.1.3** — the live suite
       (`test-shelley-live.sh`) hard-codes `refs/heads/entire/checkpoints/v1`
       in four places (settings, the `--checkpoint-backend` flag, and the
@@ -251,6 +288,17 @@ Unauthorized` forever with no alert (telnyx-vm and kgl-thoughts had both gone
       `tailscale ping` answered in 3 ms throughout — it was the SSH policy
       dropping TCP/22, since that rule is keyed on `tag:dev`. Upgraded to 3.0.9
       the same day; it was the last VM on 2.9.0. Whole fleet is now on one tag.
+
+## Evaluations
+
+- [ ] **GitOps for the tailnet policy file.** Keep the policy in a repo and apply
+      it on merge with Tailscale's `gitops-acl-action`, holding a policy-scoped
+      OAuth client in GitHub Actions secrets. That gives policy changes PR
+      review and history without putting policy-write on any VM. It must stay
+      separate from `api-tailscale`: that token is shared by every tagged VM, and
+      giving it policy scope would let any VM grant itself anything, undoing the
+      2026-08-19 narrowing (`tailnet.md`). Worth it once policy edits stop being
+      rare; the Aperture rollout (2026-10) needed one console edit.
 
 ## Authoring and access
 
