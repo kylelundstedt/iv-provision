@@ -29,8 +29,9 @@ subscription logins, outside Aperture, for now. Gates, in order:
   - The installed `upgrade-vm` skill still uses `~/iv-image` paths; fix it
     before the fleet run.
 - [ ] **Release + fleet:** tag, then `upgrade-vm` each VM. Codex breaks on a VM
-      until its one-time `codex login --device-auth`; Claude Code is already
-      logged in per VM. Recreated VMs need both logins again.
+      until its one-time `codex login --device-auth`, and Claude Code until
+      `claude` → `/login` (not every VM has one; iv-cli did not). Recreated VMs
+      need both logins again.
 
 ## Decouple from the personal dotfiles repo
 
