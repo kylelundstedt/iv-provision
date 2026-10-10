@@ -15,24 +15,22 @@ subscription logins, outside Aperture, for now. Gates, in order:
       the subscription models, and an unauthenticated `/v1/messages` gets
       Anthropic's own `401`, so passthrough works. Aperture's default `src: ["*"]`
       grant covers `tag:dev`; no Aperture-side change was needed.
-- [ ] **Canary on `iv-cli` (in progress 2026-10-10):** provisioned from the
-      branch, smoke passed, both configs in place. Codex logged in via
-      `--device-auth` and answered through Aperture. Claude Code logged in 2026-10-10 02:29.
-      Findings:
-  - iv-cli had **no Claude Code login** at all, so "already logged in per VM"
-    is false; plan both logins on every VM.
-  - Claude Code logged in and answered through Aperture with
-    `--model claude-opus-5-5`. **Without `--model` it fails:** the pinned
-    2.1.220 defaults to `claude-opus-5[1m]`, which Aperture's subscription
-    provider does not list (it lists `claude-opus-5-5`, `claude-fable-5-1`,
-    `claude-sonnet-5-5`, `claude-haiku-5-5`). Aperture's provider model list is
-    an allowlist, so a client whose default model is not on it fails outright.
-  - **Bump `CLAUDE_CODE_VERSION` before release**, for the same reason as Codex.
-  - **Bump `CODEX_VERSION` before release.** The 0.146.0 pin predates
-    `gpt-6.1-sol` ("Model metadata ... not found. Defaulting to fallback
-    metadata"). Codex 0.162.1 on the Mac has no such warning.
-  - `/codex/models` returns 404 through Aperture on the Mac too; harmless, since
-    prompts still work.
+- [x] ~~**Canary on `iv-cli`**~~ passed 2026-10-10 at `a7797d8`: provision and
+      smoke clean, both configs in place, both CLIs logged in (`codex login
+    --device-auth`; `claude` → `/login`) and answering through Aperture with
+      no model override — Claude Code 2.1.296 → `claude-opus-5-5`, Codex 0.162.1
+      → `gpt-6.1-sol`. Findings:
+  - The pins were bumped (Claude Code 2.1.220 → 2.1.296, Codex 0.146.0 →
+    0.162.1) because the old ones broke on Aperture: 2.1.220 defaults to
+    `claude-opus-5[1m]`, which Aperture's subscription provider does not list,
+    and 0.146.0 has no metadata for `gpt-6.1-sol`. Aperture's provider model
+    list is an allowlist, so pins must move when the model list does.
+  - iv-cli had **no Claude Code login** at all; plan both logins on every VM.
+  - `/codex/models` returns 404 through Aperture on the Mac too; harmless.
+  - Codex 0.162.1 warns that `codex-code-mode-host` is missing, so Code Mode is
+    off; the provisioner installs only the `codex` binary. Prompts work.
+    Decide: also install the pinned `codex-code-mode-host` release asset, or
+    accept Code Mode off.
   - The installed `upgrade-vm` skill still uses `~/iv-image` paths; fix it
     before the fleet run.
 - [ ] **Release + fleet:** tag, then `upgrade-vm` each VM. Codex breaks on a VM
