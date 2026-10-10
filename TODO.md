@@ -3,6 +3,25 @@
 Open work only. Release history → the table in `index.qmd`. Historical
 research (custom-image / arm64 era) → `registry.md`.
 
+## Aperture gateway rollout (branch `feat/aperture-gateway`)
+
+Claude Code and Codex on every VM route through `http://aperture.dojo-sun.ts.net`
+on their own subscription logins. The modified Shelley stays on its own
+subscription logins, outside Aperture, for now. Gates, in order:
+
+- [ ] **Tailnet policy:** grant `tag:dev` → the `aperture` node. On 2026-10-10
+      the name resolved from `iv-agentsview` (`tag:dev`) but every request
+      timed out, while the same URL answered from Kyle's Mac. The node is
+      untagged; tagging it (e.g. `tag:aperture`) gives the grant a stable `dst`.
+- [ ] **Aperture grant:** `tag:dev` needs `role: user` plus model patterns for
+      Claude and the Codex backend (Aperture is deny-by-default).
+- [ ] **Canary on one VM:** provision from the branch, `codex login --device-auth`,
+      confirm `claude` and `codex` both answer and both appear in Aperture's
+      session log under the VM's identity.
+- [ ] **Release + fleet:** tag, then `upgrade-vm` each VM. Codex breaks on a VM
+      until its one-time `codex login --device-auth`; Claude Code is already
+      logged in per VM. Recreated VMs need both logins again.
+
 ## Decouple from the personal dotfiles repo
 
 The team layer must stand alone: a fleet VM should provision fully without
@@ -57,7 +76,7 @@ macOS-only and part of the auditing control plane rather than the audited VMs.
 What remains:
 
 - [x] ~~Enroll `ave-adapters` in Entire ACR capture.~~ Done: `ff5cc95 chore:
-    enable Entire Shelley capture` (2026-08-18) is on `origin/main`, settings
+  enable Entire Shelley capture` (2026-08-18) is on `origin/main`, settings
       byte-identical to `fannie-sflpd`/`iv-docs` (git-branch backend, telemetry
       off, external agents on), tracking only `.entire/settings.json` and
       `.entire/.gitignore` so all nine worktrees and future clones inherit it.
@@ -81,7 +100,7 @@ What remains:
       metadata byte-identical (`full.jsonl`/`metadata.json`/`prompt.txt`/
       `transcript.jsonl`). Storage moves to `refs/entire/checkpoints/<shard>/<id>`,
       **outside** `refs/heads/*`; propagation is the backend-aware `entire hooks
-    git pre-push` hook, not a push refspec. So the plugin side is cheap. The
+  git pre-push` hook, not a push refspec. So the plugin side is cheap. The
       cost is elsewhere, and is why this is not a flag flip: 1. **Qualify `refs` against 0.1.3** — the live suite
       (`test-shelley-live.sh`) hard-codes `refs/heads/entire/checkpoints/v1`
       in four places (settings, the `--checkpoint-backend` flag, and the

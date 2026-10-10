@@ -134,7 +134,7 @@ The concrete Apple enrollment sequence is documented by the
 Every development VM registers one remote MCP endpoint:
 
 ```text
-http://ai.dojo-sun.ts.net/v1/mcp
+http://aperture.dojo-sun.ts.net/v1/mcp
 ```
 
 Examples use HTTP because the gateway is tailnet-only and the connection is
@@ -207,7 +207,7 @@ Every VM uses the same base URL:
 ```json
 {
   "env": {
-    "ANTHROPIC_BASE_URL": "http://ai.dojo-sun.ts.net"
+    "ANTHROPIC_BASE_URL": "http://aperture.dojo-sun.ts.net"
   }
 }
 ```
@@ -226,7 +226,7 @@ model_provider = "aperture"
 
 [model_providers.aperture]
 name = "Aperture"
-base_url = "http://ai.dojo-sun.ts.net/codex"
+base_url = "http://aperture.dojo-sun.ts.net/codex"
 wire_api = "responses"
 requires_openai_auth = true
 ```
