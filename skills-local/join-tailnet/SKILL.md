@@ -5,8 +5,12 @@ description: Manually join an exe.dev VM to the Tailscale tailnet. Provisioning 
 
 # Join Tailnet
 
-Joins an exe.dev VM to the IV Tailscale tailnet. The VM must have
-the `api-tailscale` integration attached (attach it per VM; there is no tag).
+Joins an exe.dev VM to the IV Tailscale tailnet. The VM must have the
+`api-tailscale` integration: on a private dev VM through the exe.dev tag
+`tailnet` (a standing grant), and on anything internet-facing or prod-lane only
+as a time-boxed per-VM attachment
+(`integrations attach api-tailscale vm:<vm> --for 30m`), never the tag. The
+two-lane contract lives in `tailnet.md`.
 
 ## Usage
 
