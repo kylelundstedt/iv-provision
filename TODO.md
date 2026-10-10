@@ -17,7 +17,7 @@ subscription logins, outside Aperture, for now. Gates, in order:
       grant covers `tag:dev`; no Aperture-side change was needed.
 - [x] ~~**Canary on `iv-cli`**~~ passed 2026-10-10 at `a7797d8`: provision and
       smoke clean, both configs in place, both CLIs logged in (`codex login
-    --device-auth`; `claude` → `/login`) and answering through Aperture with
+  --device-auth`; `claude` → `/login`) and answering through Aperture with
       no model override — Claude Code 2.1.296 → `claude-opus-5-5`, Codex 0.162.1
       → `gpt-6.1-sol`. Findings:
   - The pins were bumped (Claude Code 2.1.220 → 2.1.296, Codex 0.146.0 →
@@ -27,12 +27,14 @@ subscription logins, outside Aperture, for now. Gates, in order:
     list is an allowlist, so pins must move when the model list does.
   - iv-cli had **no Claude Code login** at all; plan both logins on every VM.
   - `/codex/models` returns 404 through Aperture on the Mac too; harmless.
-  - Codex 0.162.1 warns that `codex-code-mode-host` is missing, so Code Mode is
-    off; the provisioner installs only the `codex` binary. Prompts work.
-    Decide: also install the pinned `codex-code-mode-host` release asset, or
-    accept Code Mode off.
-  - The installed `upgrade-vm` skill still uses `~/iv-image` paths; fix it
-    before the fleet run.
+  - Codex 0.162.1 warned that `codex-code-mode-host` was missing (Code Mode
+    off). Fixed in `02f9107`: installed from the same pinned release, smoke
+    asserts it; re-tested on iv-cli, warning gone.
+  - The dotfiles copy of `upgrade-vm` was on `~/iv-image` paths; synced to this
+    repo's copy (dotfiles #71), which now has the one-time login step
+    (`4347d12`).
+- [ ] **Confirm in Aperture's dashboard** that iv-cli's sessions (2026-10-10
+      ~02:28–02:38 UTC) appear under the `iv-cli` identity (needs an admin).
 - [ ] **Release + fleet:** tag, then `upgrade-vm` each VM. Codex breaks on a VM
       until its one-time `codex login --device-auth`, and Claude Code until
       `claude` → `/login` (not every VM has one; iv-cli did not). Recreated VMs
