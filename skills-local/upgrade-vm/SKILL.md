@@ -174,15 +174,20 @@ cd ~/dotfiles && git pull --ff-only && ./install.sh --upgrade
 
 The mini can be done remotely. Its port 22 is open only to `tag:dev`, so go
 through a dev VM; with no terminal, `install.sh` skips 1Password and the
-Keychain secret refresh and runs everything else (dotfiles 2026-10-10; a plain
-remote run was verified that day, `--upgrade` not yet):
+Keychain secret refresh and runs everything else (dotfiles 2026-10-10):
 
 ```bash
 ssh exedev@<dev-vm> 'ssh klundstedt@klundstedt-mini "cd ~/dotfiles && git pull --ff-only && ./install.sh --upgrade"'
 ```
 
-A Claude Code `/login` and the secret refresh still need a run at the mini's own
-terminal: its login Keychain is locked to SSH sessions.
+Verified 2026-10-10: Claude Code and Codex upgrade this way, which is the part
+that matters for Aperture. The tools installed from GitHub releases (`gh`,
+`jq`, `rg`, `fzf` and about ten more) do **not**: their version lookups run
+anonymously, because `gh`'s token is in the locked Keychain, so they hit
+GitHub's 60-per-hour API limit and keep their current version. Nothing is
+removed. A Claude Code `/login`, the secret refresh and those tool upgrades
+still need a run at the mini's own terminal: its login Keychain is locked to SSH
+sessions.
 
 ## Path B — Full destroy + recreate (only when required)
 
