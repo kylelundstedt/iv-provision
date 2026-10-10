@@ -159,6 +159,19 @@ Still worth running if you want the overlay's own content refreshed (its
 ssh <vm> "cd ~/dotfiles && git pull --ff-only && ./install.sh"
 ```
 
+### Personal Macs: upgrade their CLIs too (dotfiles users only)
+
+Not part of the team procedure — skip it if you don't run the personal dotfiles
+on your Macs. Dotfiles' `install.sh` never upgrades a CLI that is already
+installed, so a plain re-run leaves a Mac behind the floors this release just
+raised on the fleet — and Macs route through the same Aperture gateway, so they
+hit the same model errors when behind. Once the fleet is done, on each Mac
+(`klundstedt-mini`, `klundstedt-mbp`):
+
+```bash
+cd ~/dotfiles && git pull --ff-only && ./install.sh --upgrade
+```
+
 ## Path B — Full destroy + recreate (only when required)
 
 This **wipes the VM's local disk** — it reprovisions, it does not migrate state.
