@@ -9,12 +9,18 @@ Claude Code and Codex on every VM route through `http://aperture.dojo-sun.ts.net
 on their own subscription logins. The modified Shelley stays on its own
 subscription logins, outside Aperture, for now. Gates, in order:
 
-- [ ] **Tailnet policy:** grant `tag:dev` → the `aperture` node. On 2026-10-10
-      the name resolved from `iv-agentsview` (`tag:dev`) but every request
-      timed out, while the same URL answered from Kyle's Mac. The node is
-      untagged; tagging it (e.g. `tag:aperture`) gives the grant a stable `dst`.
-- [ ] **Aperture grant:** `tag:dev` needs `role: user` plus model patterns for
-      Claude and the Codex backend (Aperture is deny-by-default).
+- [ ] **Tailnet policy:** grant `tag:dev` network access to the Aperture node
+      (`tcp:80`, `tcp:443`, `icmp:*` per Aperture's docs). On 2026-10-10 the name
+      resolved from `iv-agentsview` (`tag:dev`) but every request timed out,
+      while the same URL answered from Kyle's Mac. The node is untagged and
+      user-owned, so target it with a `hosts` alias (`"aperture": "100.126.54.92"`)
+      rather than tagging it: tagging would change how Kyle's own devices reach
+      it. This credential cannot make the edit (`GET /acl` is 403 by design), so
+      it is a console change.
+- [ ] **Aperture grant (check only):** Aperture's default config grants
+      `role: user` and `models: "**"` to `src: ["*"]`. If that default is still
+      in place at `/admin/settings/grants`, `tag:dev` needs nothing more; if it
+      was narrowed, add a `tag:dev` grant.
 - [ ] **Canary on one VM:** provision from the branch, `codex login --device-auth`,
       confirm `claude` and `codex` both answer and both appear in Aperture's
       session log under the VM's identity.
@@ -76,7 +82,7 @@ macOS-only and part of the auditing control plane rather than the audited VMs.
 What remains:
 
 - [x] ~~Enroll `ave-adapters` in Entire ACR capture.~~ Done: `ff5cc95 chore:
-  enable Entire Shelley capture` (2026-08-18) is on `origin/main`, settings
+enable Entire Shelley capture` (2026-08-18) is on `origin/main`, settings
       byte-identical to `fannie-sflpd`/`iv-docs` (git-branch backend, telemetry
       off, external agents on), tracking only `.entire/settings.json` and
       `.entire/.gitignore` so all nine worktrees and future clones inherit it.
@@ -100,7 +106,7 @@ What remains:
       metadata byte-identical (`full.jsonl`/`metadata.json`/`prompt.txt`/
       `transcript.jsonl`). Storage moves to `refs/entire/checkpoints/<shard>/<id>`,
       **outside** `refs/heads/*`; propagation is the backend-aware `entire hooks
-  git pre-push` hook, not a push refspec. So the plugin side is cheap. The
+git pre-push` hook, not a push refspec. So the plugin side is cheap. The
       cost is elsewhere, and is why this is not a flag flip: 1. **Qualify `refs` against 0.1.3** — the live suite
       (`test-shelley-live.sh`) hard-codes `refs/heads/entire/checkpoints/v1`
       in four places (settings, the `--checkpoint-backend` flag, and the
@@ -270,6 +276,17 @@ Unauthorized` forever with no alert (telnyx-vm and kgl-thoughts had both gone
       `tailscale ping` answered in 3 ms throughout — it was the SSH policy
       dropping TCP/22, since that rule is keyed on `tag:dev`. Upgraded to 3.0.9
       the same day; it was the last VM on 2.9.0. Whole fleet is now on one tag.
+
+## Evaluations
+
+- [ ] **GitOps for the tailnet policy file.** Keep the policy in a repo and apply
+      it on merge with Tailscale's `gitops-acl-action`, holding a policy-scoped
+      OAuth client in GitHub Actions secrets. That gives policy changes PR
+      review and history without putting policy-write on any VM. It must stay
+      separate from `api-tailscale`: that token is shared by every tagged VM, and
+      giving it policy scope would let any VM grant itself anything, undoing the
+      2026-08-19 narrowing (`tailnet.md`). Worth it once policy edits stop being
+      rare; the Aperture rollout (2026-10) needed one console edit.
 
 ## Authoring and access
 
