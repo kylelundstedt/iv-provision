@@ -17,10 +17,17 @@ subscription logins, outside Aperture, for now. Gates, in order:
       grant covers `tag:dev`; no Aperture-side change was needed.
 - [ ] **Canary on `iv-cli` (in progress 2026-10-10):** provisioned from the
       branch, smoke passed, both configs in place. Codex logged in via
-      `--device-auth` and answered through Aperture. Claude Code login pending.
+      `--device-auth` and answered through Aperture. Claude Code logged in 2026-10-10 02:29.
       Findings:
   - iv-cli had **no Claude Code login** at all, so "already logged in per VM"
     is false; plan both logins on every VM.
+  - Claude Code logged in and answered through Aperture with
+    `--model claude-opus-5-5`. **Without `--model` it fails:** the pinned
+    2.1.220 defaults to `claude-opus-5[1m]`, which Aperture's subscription
+    provider does not list (it lists `claude-opus-5-5`, `claude-fable-5-1`,
+    `claude-sonnet-5-5`, `claude-haiku-5-5`). Aperture's provider model list is
+    an allowlist, so a client whose default model is not on it fails outright.
+  - **Bump `CLAUDE_CODE_VERSION` before release**, for the same reason as Codex.
   - **Bump `CODEX_VERSION` before release.** The 0.146.0 pin predates
     `gpt-6.1-sol` ("Model metadata ... not found. Defaulting to fallback
     metadata"). Codex 0.162.1 on the Mac has no such warning.
