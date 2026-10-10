@@ -83,6 +83,9 @@ CLAUDE_CODE_SHA256_AMD64=45fe2b33f5cbdd114309618970bcd90b8b163e34252d66cf100d7e0
 CLAUDE_CODE_SHA256_ARM64=c644ad3e5ca3367e75d198194189d13180f33c491304c2d19557f7c1e8d5e0a6
 CODEX_SHA256_AMD64=86f268d81b898f3e144c5ecff2ad2fda2c5802e042d6195b72538fe0fa125057
 CODEX_SHA256_ARM64=bf3ca2719f1143b1440fbd85c149379e696c782c50ad7991f8bfcec60b2600c1
+# Code Mode host: a separate release asset, versioned with CODEX_VERSION.
+CODEX_CODE_MODE_HOST_SHA256_AMD64=458239ea45c1fc508d89695f180ab352f2834709a8a46929a4466f4f04399ada
+CODEX_CODE_MODE_HOST_SHA256_ARM64=1395ce9367f8acd280674dff083edf25bf221d908b8351d5bd4f3fdde9181e9a
 UV_SHA256_AMD64=eaf842262aa1c418d8ecc5605f02ee1ebfd369124fa48548e85f9481a47831a9
 UV_SHA256_ARM64=2c5d6e3092cc5223b10ff403880cc75121bf64e84644e7a0c69f643b0d89ac95
 
@@ -136,6 +139,7 @@ case "$DPKG_ARCH" in
     CLAUDE_CODE_SHA256=$CLAUDE_CODE_SHA256_AMD64
     CLAUDE_CODE_ASSET_ARCH=x64
     CODEX_SHA256=$CODEX_SHA256_AMD64
+    CODEX_CODE_MODE_HOST_SHA256=$CODEX_CODE_MODE_HOST_SHA256_AMD64
     CODEX_ASSET_ARCH=x86_64
     UV_SHA256=$UV_SHA256_AMD64
     UV_ASSET_ARCH=x86_64
@@ -154,6 +158,7 @@ case "$DPKG_ARCH" in
     CLAUDE_CODE_SHA256=$CLAUDE_CODE_SHA256_ARM64
     CLAUDE_CODE_ASSET_ARCH=arm64
     CODEX_SHA256=$CODEX_SHA256_ARM64
+    CODEX_CODE_MODE_HOST_SHA256=$CODEX_CODE_MODE_HOST_SHA256_ARM64
     CODEX_ASSET_ARCH=aarch64
     UV_SHA256=$UV_SHA256_ARM64
     UV_ASSET_ARCH=aarch64
@@ -920,6 +925,7 @@ install_codex() {
   echo "== Codex >=$CODEX_VERSION ($CODEX_ASSET_ARCH; installed: ${actual:-missing}) =="
   if version_at_least "$best" "$CODEX_VERSION"; then
     [[ $best == "$CODEX_VERSION" ]] || echo "  keeping newer self-updated $best (pin is a floor)"
+    install_codex_code_mode_host
     return
   fi
   # musl build: static, so it does not care what libc the base image ships.
@@ -930,6 +936,26 @@ install_codex() {
   tar -xzf "$TMP/codex.tar.gz" -C "$TMP/codex"
   install -m 0755 "$TMP/codex/codex-${CODEX_ASSET_ARCH}-unknown-linux-musl" "$HOME/.local/bin/codex"
   [[ $(codex_version) == "$CODEX_VERSION" ]]
+  install_codex_code_mode_host force
+}
+
+# Codex >= 0.16x runs Code Mode in a separate `codex-code-mode-host` binary that
+# it looks for next to itself (`code_mode_host` is a stable feature, on by
+# default). Without it Codex warns on every run and Code Mode fails closed.
+# Homebrew's cask ships both binaries; the Linux release splits them into two
+# assets, so install the host from the same pinned release. Reinstalled with
+# every pinned Codex install ("force"); otherwise only when missing, which is
+# the case on a VM whose Codex already met the pin.
+install_codex_code_mode_host() {
+  local host="$HOME/.local/bin/codex-code-mode-host"
+  [[ ${1:-} == force || ! -x $host ]] || return 0
+  echo "  installing codex-code-mode-host $CODEX_VERSION"
+  download_verified \
+    "https://github.com/openai/codex/releases/download/rust-v${CODEX_VERSION}/codex-code-mode-host-${CODEX_ASSET_ARCH}-unknown-linux-musl.tar.gz" \
+    "$CODEX_CODE_MODE_HOST_SHA256" "$TMP/codex-code-mode-host.tar.gz"
+  mkdir -p "$TMP/codex-code-mode-host" "$HOME/.local/bin"
+  tar -xzf "$TMP/codex-code-mode-host.tar.gz" -C "$TMP/codex-code-mode-host"
+  install -m 0755 "$TMP/codex-code-mode-host/codex-code-mode-host-${CODEX_ASSET_ARCH}-unknown-linux-musl" "$host"
 }
 
 remove_legacy_quarto
