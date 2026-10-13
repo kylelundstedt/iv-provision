@@ -2,155 +2,169 @@
 title: "Resident Layer"
 ---
 
-**Status: design, not implemented.** Decided 2026-10-12 in conversation on
-`iv-provision`; recorded here so the design survives the conversation. Nothing
-in this page is provisioned yet. The `kgl-hermes` VM — empty, and named for a
-framework this design rejects — is to be retired rather than reused; the
-resident layer gets a fresh VM once it has a name of its own.
+**Status: design, not implemented.** Revised 2026-10-13: one resident
+project-manager agent per project VM, with consolidated human access from the
+Macs. This supersedes the earlier single-host placement and the assumption
+that Shelley would eventually absorb the whole layer. No VM is created,
+renamed, or retired by this design; `kgl-hermes` is not its deployment target.
 
-## The problem: episodic agents have no presence
+This page defines the manager's responsibilities, memory, policy, and lifecycle.
+[Rex-Based Project Management](rex-based-project-management.md) defines the
+proposed session layout, execution workflow, and multi-project Mac workspace.
 
-Every agent on this fleet is episodic. A Shelley conversation exists only while
-a turn is executing; between turns it is rows in SQLite — nothing runs, nothing
-watches, nothing can notice. Scheduled conversations wake on a timer, but each
-wakeup is a fresh conversation with no memory of the last one's conclusions:
-ten Monday check-ins are ten amnesiacs. Every interaction is initiated by a
-human or a cron entry.
+## Purpose and placement
 
-The missing capability is a **standing presence**: a process that persists
-through time, accumulates a model of what is going on, and can *correctly
-initiate contact* — notice something, judge from history that it matters, and
-interrupt the owner. That judgment-to-interrupt is the litmus test: if every
-exchange starts with the human typing, there is no presence, only a very good
-tool.
+The missing capability is continuity between work sessions: remembering agreed
+priorities, tracking delegated work, noticing a blocked task, and asking the
+owner for a decision without waiting for another prompt.
 
-Concretely, today nothing on this fleet will *tell* anyone that the Monday
-Shelley drift-check opened an issue, that an Anthropic refresh token expired on
-`iv-docs` (it is discovered when a conversation fails), or that a delegated
-job finished. The resident layer is the thing that notices, remembers, routes,
-and reports — and does nothing else.
+Deploy **one resident manager on each project-specific VM**, beside that
+project's workers and state. It runs as an independent systemd service, not as
+a foreground process whose lifetime depends on an open terminal. A conversation
+client in a Rex block is an interface to that service, not the service itself.
 
-## Where it sits
+| Layer                     | Responsibility                                                         |
+| ------------------------- | ---------------------------------------------------------------------- |
+| Resident project manager  | Policy, routing, working memory, task tracking, notifications          |
+| Execution agents          | Planning, adversarial review, implementation, integration              |
+| Session interface         | Rex project session remotely; manager conversation clients on the Macs |
+| Project and machine state | Repository, worktrees, durable runtime records, VM and network         |
 
-```
-memory / identity / policy      ← the resident layer (this page)
-conversation & tool execution   ← per-VM Shelleys, Claude Code, Codex
-session / process substrate     ← tmux/herdr today; Rex-class multiplexers later
-machine & network fabric        ← microVMs, tailnet, exe.dev integrations
-```
-
-The layers below are owned and working. Per-VM Shelley servers are the
-execution layer — each sits on its project's actual state, and a management
-conversation can already delegate to them over the tailnet
-(`ssh <vm> shelley client chat …`), collect with `client read -wait`, and tag
-for tracking; the 3.0.28 fleet rollout was run exactly this way. AgentsView is
-the fleet-wide episodic archive; Entire is code provenance. The resident layer
-adds only what none of them have: continuity, a channel, and policy.
-
-AgentsView's role was revised 2026-10-13 against its v0.45.0 guide: it is no
-longer only a pull-queried archive. Its SSE streams and health scores feed
-triage (attribute 8), its Recall feature feeds distillation (attribute 9), and
-its native memory plugins for Claude Code and Codex let *workers* consult their
-own history at session start — so delegation prompts stay terse instead of
-carrying context the archive already holds. The fleet pin is 0.43.0; using any
-of this requires a qualified bump.
+The Mac management workspace aggregates conversations with these managers. It
+is **not another coordinating agent**. No fleet-wide manager-of-managers is
+required initially; cross-project delegation needs explicit permission.
 
 ## Specification
 
-Each attribute carries a falsifiable test, in the same spirit as
-`tests/test-provision.sh`: an invariant nobody has to remember is an invariant
-a check asserts.
-
 ### A. Role — what it is
 
-| # | Attribute | Test |
-|---|-----------|------|
-| 1 | **Manager, not worker.** Verbs: notice, consult, route, record, notify. All real work is delegated to per-VM Shelleys or TUI agents. | Tool surface is exactly: channel I/O, memory read/write, `shelley client` over the tailnet, scheduler. No repo checkouts, no project credentials. |
-| 2 | **Standing presence.** Owns an inbound channel and a heartbeat; exists between interactions. | It sometimes initiates contact, correctly — and knows enough history for the interruption to be apt. |
+| #   | Attribute                                                                                                                   | Acceptance test                                                                                                                |
+| --- | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| 1   | **Manager, not worker.** Notice, consult, route, record, notify. Delegate planning and project changes to execution agents. | The manager's interface manages assignments and approvals; it does not implement tasks in worker checkouts.                    |
+| 2   | **Standing presence.** Accept conversations and heartbeat events; maintain continuity between interactions.                 | Closing every client leaves the manager and assigned work running; the manager can notify the owner when a decision is needed. |
 
 ### B. Form — how it is built
 
-| # | Attribute | Test |
-|---|-----------|------|
-| 3 | **Thin.** A few hundred lines; triage is a rules check or one cheap small-model call; asleep when nothing happens. | LOC budget (~500) enforced in review; triage cost per event is near zero. Growth toward 2,000 lines means it is absorbing work that belongs in another layer. |
-| 4 | **Designed for obsolescence.** Interfaces over internals: every function maps to an upstream Shelley feature with a named retirement trigger (see table below). | Each component can be deleted independently; memory is kept in formats a future Shelley could inherit directly (markdown in a git repo, not a bespoke store). |
+| #   | Attribute                                                                                                                                                                | Acceptance test                                                                                                    |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| 3   | **Thin.** Aim for a few hundred lines of coordination code (~500 as a design budget, not a reason to omit recovery or safety). Prefer rules or a cheap model for triage. | Idle operation is inexpensive; growth triggers review for duplicated worker, storage, or transport functionality.  |
+| 4   | **Replaceable and worker-independent.** Stable interfaces over product internals; no dependency on Shelley becoming the resident layer.                                  | Replace a worker or conversation client without losing project identity, memory, assignments, or approval history. |
 
 ### C. Governance — what keeps it safe
 
-| # | Attribute | Test |
-|---|-----------|------|
-| 5 | **Policy-constrained.** A reviewed policy *file* (data, not code): which VMs it may delegate to, auto-run vs. ask-first actions, spend ceilings, quiet hours. Default deny. | Policy changes arrive only as git commits; the layer cannot edit its own policy. |
-| 6 | **Disciplined like the fleet, bounded like a project.** The runtime is pinned and provisioned (immutable platform layer); its *knowledge* evolves (project layer); git is the boundary. | Runtime changes go through pin-and-review like every provisioned tool; knowledge changes go through PRs. Nothing changes at runtime outside git. |
+| #   | Attribute                                                                                                                                                           | Acceptance test                                                                                                                            |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| 5   | **Policy-constrained.** Reviewed policy data defines local worker permissions, ask-first actions, budgets, quiet hours, and any cross-project grants. Default deny. | The manager cannot modify its effective policy or authorize its own exceptions; sibling VMs are not implicitly trusted delegation targets. |
+| 6   | **Pinned runtime, reviewable learning.** Platform changes use normal pin-and-review; durable knowledge and skills evolve through reviewed changes.                  | No runtime self-modification or unreviewed executable skills. Ordinary conversation and task-state writes remain allowed.                  |
 
 ### D. State — what it knows
 
-| # | Attribute | Test |
-|---|-----------|------|
-| 7 | **Owned working memory.** Bounded, curated files (~1–2k tokens: in-flight work, owner preferences, standing decisions) in a git repo. The only store it owns, and the hot path for triage. | Size budget enforced; `git log` of the memory repo reads as a coherent history of its understanding. |
-| 8 | **Archives behind it, read-only.** AgentsView for fleet-wide episodic memory, Entire for code provenance — *searches* on demand, never on the triage hot path. Exception (v0.45.0): AgentsView's push interfaces — SSE session-event streams and no-model-charge health scores — are cheap and may feed triage directly, giving the layer a third event source (delegation lifecycle) beside channel and heartbeat, and a free "is this delegation stuck?" signal. | Read-only access; removing the archives degrades deep questions and event delivery, not the ability to triage what remains. |
-| 9 | **Learning by batch distillation.** Two gates: AgentsView **Recall** (experimental, v0.45.0) extracts candidate lessons from the archive with evidence links, and owner approval there is gate one; a scheduled job then converts *approved* entries into updates — to working memory and to per-project `skills/` — **as PRs**, risk-tiered (prose and SQL fast-laned, executables reviewed), which is gate two. The landing zone stays git: Recall's store is a source, not a skills directory. | Zero runtime self-modification; every learned thing has a commit, an author trail, and a reviewable diff. |
+| #   | Attribute                                                                                                                                                                                        | Acceptance test                                                                                                                        |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| 7   | **Project-local working memory.** Bounded curated files (~1–2k tokens) hold priorities, decisions, preferences, and pointers to active tasks. Distribute shared policy/preferences consistently. | Triage needs only small local context; memory changes have provenance; a client reconnect does not create a new manager.               |
+| 8   | **Archives behind it.** Read AgentsView for session history and Entire for code provenance. Qualified event and health interfaces may supply triage hints.                                       | Archive failure does not erase active task state or prevent local coordination; hints are checked against authoritative worker status. |
+| 9   | **Learning by batch distillation.** Recall is a candidate source, subject to qualification. Owner-approved candidates become risk-tiered PRs for project memory and skills.                      | Candidate approval and PR approval are separate gates; executable or mutating changes require explicit review.                         |
 
-## Retirement triggers
+## Execution and authentication boundaries
 
-"Temporary" is a property with triggers, not a mood. Upstream Shelley
-(`boldsoftware/shelley`, observed Oct 2026) is assembling the same capabilities:
-channels connecting conversations to external chats, a `message_user` tool,
-in-place compaction that lets one conversation live indefinitely, and
-subagent-supervisor ergonomics. As the `aifoundry-org` fork picks these up and
-they pass fleet qualification, the resident layer sheds parts:
+Claude Code and Codex are the proposed subscription-backed workers, through
+provider-supported interfaces and authentication. Shelley remains an optional
+worker/workbench where its inference access and deployment are qualified. A
+product running on a host does not by itself establish subscription entitlement
+or inclusion in a mobile app or portal.
 
-| Component | Retired by | Expected order |
-|-----------|-----------|----------------|
-| Inbound channel | fork ships channel support | first |
-| Outbound notification | fork ships `message_user` | second |
-| Scheduling / heartbeat | fork ships queued + scheduled runs | third |
-| Triage + policy | a Shelley conversation cheap enough to be the triage loop | fourth |
-| Working memory / identity | **no upstream trigger yet** | last — possibly never |
+The design must not depend on copying CLI/Keychain tokens into another product,
+or assume that an independent OAuth flow establishes provider authorization.
+Validate each provider/product combination separately. This is a design gate,
+not a legal determination about the existing fork. It applies to the resident
+manager's own inference access as well as its workers.
 
-The end state is acceptable and small: the layer may shrink to just a memory
-repo and a policy file that a long-lived Shelley conversation consults.
+Define a small worker-adapter contract: **start, resume, inspect, cancel,
+collect results, and surface approval requests**. Keep assignment IDs distinct
+from conversation IDs and Rex object IDs. Mark manager-owned assignments so
+workers do not recursively create managers or duplicate delegations.
 
-## Why not an existing project
+The contract also delivers approval or rejection, bound to the assignment,
+requested action, and revision. Reject stale decisions; duplicate delivery must
+not execute an action twice. Enforce policy outside manager and worker write
+authority: prompt instructions alone are not a permission boundary, and a
+manager cannot delegate a policy change it may not make itself.
 
-Surveyed 2026-10-12. The category splits cleanly into *thick resident agents
-that do their own work* and *thin dispatchers without memory or presence*;
-nothing found is the thin resident memory-and-policy layer that delegates to
-remote durable agent servers — largely because this fleet already owns the
-pieces (per-VM workers, archives, provenance) that make thickness unnecessary.
+Coordination is local by default. Fleet inventory and human access must not
+depend on a vendor portal discovering every host. Rex and Zed are replaceable
+interfaces, not the authority for project existence or task completion.
 
-| Project | Verdict |
-|---------|---------|
-| **Hermes Agent** (Nous Research) | Closest feature match: resident, messaging gateways, bounded curated memory, scheduler. Rejected as-is: a large framework whose signature self-improving skills loop writes its own executable skills at runtime — the opposite of the vendored-and-reviewed skills regime — and it overlaps Shelley as a worker rather than layering above it. Its bounded-memory-file design (small curated memory and user-profile files over a searchable archive) is adopted here. |
-| **NanoClaw** | Right size (~500 lines), wrong execution model: its containerized workers do the work themselves, and giving them fleet reach would break the container isolation that is its entire point. Its size discipline is adopted here. |
-| **cmesh** | Policy-gated agent delegation over Tailscale — the delegation transport as a dedicated project. Its policy-gating shape informs attribute 5. |
-| **sortie** | Thin event→agent-session dispatcher (tracker-driven). Right shape, no memory, no channel, no presence. |
-| **Paseo / mission-control UIs** | Human-driven dashboards over parallel agents — the Rex-adjacent niche, not a resident layer. |
+## Memory, operational state, and archives
 
-The design is therefore: **Hermes's memory conventions, NanoClaw's size,
-cmesh's policy gating, Shelley as the execution layer, AgentsView/Entire as the
-archives.**
+The earlier phrase "the only store it owns" was too restrictive. Separate:
 
-## Relation to the self-improving-loop question
+- **Curated working memory:** small, portable, git-versioned knowledge, updated
+  through the review process.
+- **Operational state:** durable conversations, task/worker identifiers,
+  statuses, pending approvals, and delivery/reconnect cursors. Updated during
+  operation, without requiring a PR per message. Storage format and recovery
+  implementation remain open; neither terminal scrollback nor an archive
+  search is the authoritative task ledger.
+- **Archives:** AgentsView and Entire, consulted with project-appropriate
+  read access. They provide history and evidence, not control authority.
 
-Fleet discipline and per-project self-improvement are not in conflict; they
-govern different layers. The discipline protects the *platform* layer (what
-provisioning stamps identically on every VM). Self-improvement belongs to the
-*project* layer: pipeline-specific knowledge (schema drift fixes, backfill
-procedures, vendor quirks) distilled into each repo's `skills/` directory —
-proposed as PRs by the batch-distillation job (attribute 9), never written at
-runtime. Self-improvement ≠ unreviewed self-mutation: put the loop inside git
-and the conflict dissolves. The risk-tiered fast lane exists because a loop
-whose every lesson waits a week for review is a dead loop.
+The [AgentsView guide](https://www.agentsview.io/guide/) for v0.45.0 describes
+experimental Recall with evidence and approval, live-message SSE, session-health
+analysis, and Claude Code/Codex memory plugins. Proposed integration:
+
+1. Use Recall for candidate lessons; owner approval is the first gate, followed
+   by PR review for changes to memory or skills. The manager's archive access
+   remains read-only; approval belongs to the owner.
+2. Treat streamed messages and health analysis as optional triage inputs. They
+   are **not yet qualified as reliable worker-completion events**, and the guide
+   does not establish that health scores are pushed over SSE. Validate event
+   semantics, freshness, reconnect/replay, and cost before relying on them.
+3. Let qualified worker memory plugins retrieve relevant history. Assignments
+   must still carry their scope, plan revision, and acceptance criteria.
+
+The repository currently pins AgentsView 0.43.0. Qualify the required interfaces
+and any pin bump separately; the guide alone does not establish when each
+feature first shipped. Periodic reconciliation against worker status remains
+necessary even if an event feed is adopted.
+
+## Replacement criteria
+
+Retire components when a supported alternative meets their requirements, not
+according to an assumed Shelley roadmap or release order.
+
+| Component                   | Replacement must preserve                                        |
+| --------------------------- | ---------------------------------------------------------------- |
+| Conversation client         | Remote identity, durable history, reconnect, approval handling   |
+| Notifications and heartbeat | Delivery state, quiet hours, recovery after downtime             |
+| Worker adapters             | Supported authentication, task identity, results, cancellation   |
+| Coordination and policy     | Project scope, enforced permissions, owner approval gates        |
+| Memory and runtime storage  | Portable knowledge, exportable history, recoverable active tasks |
+
+A future Shelley enhancement could replace a component, but so could another
+implementation. The aim is less custom code without surrendering continuity or
+policy enforcement.
+
+## Design influences and learning boundary
+
+The earlier discussion borrowed bounded-memory conventions from Hermes, size
+discipline from NanoClaw, and policy-gating ideas from cmesh. These are design
+influences, not dependencies or commitments to deploy those projects.
+
+Fleet discipline protects the platform layer; project-specific learning belongs
+in reviewed memory and `skills/` changes. Batch distillation is delegated work,
+not permission for a manager to rewrite itself. Risk-tier review concerns what
+a change can do, not its extension: SQL that mutates data is not a prose-only
+fast-lane change.
 
 ## Open decisions
 
-- **Name** (and therefore the VM name — the role is steward/switchboard-shaped;
-  `kgl-hermes` is retired, not renamed, so the name never lies about contents).
-- **Channel**: which messaging surface the owner actually lives in.
-- **First policy file**: delegation allow-list, ask-first set, spend ceiling,
-  quiet hours.
-- **Memory curation rules**: what earns a line in the bounded working memory,
-  and what the distillation job may touch.
-- **AgentsView ≥0.45.0 qualification**: the pin is 0.43.0; Recall
-  (experimental), SSE streams, and the worker memory plugins all postdate it
-  and need a normally-qualified bump before the design can use them.
+- **Manager runtime and inference:** choose an implementation and a supported
+  authentication path without assuming a Shelley dependency.
+- **Conversation client:** select or build durable remote reconnect, consistent
+  multi-client history, approval routing, and duplicate-command protection.
+- **Policy:** define local permissions, cross-project opt-ins, review tiers,
+  budgets, notification channels, and quiet hours.
+- **State:** specify operational persistence, backup/restart recovery, and
+  bounded-memory curation rules.
+- **Qualification:** validate AgentsView integrations and the Rex deployment
+  gates in [Rex-Based Project Management](rex-based-project-management.md).

@@ -296,6 +296,10 @@ Unauthorized` forever with no alert (telnyx-vm and kgl-thoughts had both gone
       dropping TCP/22, since that rule is keyed on `tag:dev`. Upgraded to 3.0.9
       the same day; it was the last VM on 2.9.0. Whole fleet is now on one tag.
 
+## Resident project management
+
+- [ ] Qualify Linux Rex and the reconnectable manager client; implementation gates are in `rex-based-project-management.md`.
+
 ## Evaluations
 
 - [ ] **GitOps for the tailnet policy file.** Keep the policy in a repo and apply
