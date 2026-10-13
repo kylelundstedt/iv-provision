@@ -47,6 +47,14 @@ for tracking; the 3.0.28 fleet rollout was run exactly this way. AgentsView is
 the fleet-wide episodic archive; Entire is code provenance. The resident layer
 adds only what none of them have: continuity, a channel, and policy.
 
+AgentsView's role was revised 2026-10-13 against its v0.45.0 guide: it is no
+longer only a pull-queried archive. Its SSE streams and health scores feed
+triage (attribute 8), its Recall feature feeds distillation (attribute 9), and
+its native memory plugins for Claude Code and Codex let *workers* consult their
+own history at session start — so delegation prompts stay terse instead of
+carrying context the archive already holds. The fleet pin is 0.43.0; using any
+of this requires a qualified bump.
+
 ## Specification
 
 Each attribute carries a falsifiable test, in the same spirit as
@@ -79,8 +87,8 @@ a check asserts.
 | # | Attribute | Test |
 |---|-----------|------|
 | 7 | **Owned working memory.** Bounded, curated files (~1–2k tokens: in-flight work, owner preferences, standing decisions) in a git repo. The only store it owns, and the hot path for triage. | Size budget enforced; `git log` of the memory repo reads as a coherent history of its understanding. |
-| 8 | **Archives behind it, read-only.** AgentsView for fleet-wide episodic memory, Entire for code provenance — queried on demand, never on the triage hot path. | Read-only access; removing the archives degrades deep questions, not triage. |
-| 9 | **Learning by batch distillation.** A scheduled job reads recent AgentsView sessions and proposes updates — to working memory and to per-project `skills/` — **as PRs**, risk-tiered: prose and SQL fast-laned, executables reviewed. | Zero runtime self-modification; every learned thing has a commit, an author trail, and a reviewable diff. |
+| 8 | **Archives behind it, read-only.** AgentsView for fleet-wide episodic memory, Entire for code provenance — *searches* on demand, never on the triage hot path. Exception (v0.45.0): AgentsView's push interfaces — SSE session-event streams and no-model-charge health scores — are cheap and may feed triage directly, giving the layer a third event source (delegation lifecycle) beside channel and heartbeat, and a free "is this delegation stuck?" signal. | Read-only access; removing the archives degrades deep questions and event delivery, not the ability to triage what remains. |
+| 9 | **Learning by batch distillation.** Two gates: AgentsView **Recall** (experimental, v0.45.0) extracts candidate lessons from the archive with evidence links, and owner approval there is gate one; a scheduled job then converts *approved* entries into updates — to working memory and to per-project `skills/` — **as PRs**, risk-tiered (prose and SQL fast-laned, executables reviewed), which is gate two. The landing zone stays git: Recall's store is a source, not a skills directory. | Zero runtime self-modification; every learned thing has a commit, an author trail, and a reviewable diff. |
 
 ## Retirement triggers
 
@@ -143,3 +151,6 @@ whose every lesson waits a week for review is a dead loop.
   quiet hours.
 - **Memory curation rules**: what earns a line in the bounded working memory,
   and what the distillation job may touch.
+- **AgentsView ≥0.45.0 qualification**: the pin is 0.43.0; Recall
+  (experimental), SSE streams, and the worker memory plugins all postdate it
+  and need a normally-qualified bump before the design can use them.
