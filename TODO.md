@@ -5,9 +5,15 @@ research (custom-image / arm64 era) → `registry.md`.
 
 ## Aperture hostname rename (2026-10-14)
 
-- [ ] Tag `3.1.1` after merge, then re-provision every 3.1.0 VM at it
-      (`upgrade-vm`). Until then their Claude Code and Codex point at
-      `aperture.dojo-sun.ts.net`, which no longer resolves.
+- [x] ~~**Release + fleet**~~ done 2026-10-14: `3.1.1` tagged on `4224251`;
+      all 17 provisioned `tag:dev` VMs re-provisioned in place (provision and
+      smoke clean, no Shelley restarts, binary and socket both at the pin on a
+      second pass). Both base URLs read `http://ai.dojo-sun.ts.net` on every VM.
+      iv-cli confirmed end to end (`claude -p` and `codex exec` answer through
+      the gateway). kgl-songs and iv-telnyx-vm went last, individually, with
+      running services, listening ports and HTTP status identical before and
+      after. Not covered, as for 3.1.0: `iv-agentsview` (no checkout) and the
+      prod lane.
 
 ## Aperture gateway rollout (branch `feat/aperture-gateway`)
 
