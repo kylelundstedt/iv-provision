@@ -1,170 +1,202 @@
 ---
-title: "Resident Layer"
+title: "Project Manager Agent"
 ---
 
-**Status: design, not implemented.** Revised 2026-10-13: one resident
-project-manager agent per project VM, with consolidated human access from the
-Macs. This supersedes the earlier single-host placement and the assumption
-that Shelley would eventually absorb the whole layer. No VM is created,
-renamed, or retired by this design; `kgl-hermes` is not its deployment target.
+**Status: agreed design, revised 2026-10-14; partially demonstrated, not fully
+qualified.** The stable filename `resident-layer.md` is retained for existing
+links. The [NanoClaw core-loop test](nanoclaw-core-loop-test.md) demonstrates the
+basic resident mechanism without Rex, not the complete project-manager role.
 
-This page defines the manager's responsibilities, memory, policy, and lifecycle.
-[Rex-Based Project Management](rex-based-project-management.md) defines the
-proposed session layout, execution workflow, and multi-project Mac workspace.
+The manager is **accountable for moving the project toward agreed outcomes and
+keeping its plans, status, decisions, and documentation accurate**. It delegates
+specialist work within explicit authority. The
+[Agent Group Operating Model](agent-group-operating-model.md) defines the
+isolated groups; [Rex-Based Project Management](rex-based-project-management.md)
+defines how the owner accesses them.
 
-## Purpose and placement
+## 1. Mission and authority
 
-The missing capability is continuity between work sessions: remembering agreed
-priorities, tracking delegated work, noticing a blocked task, and asking the
-owner for a decision without waiting for another prompt.
+Use one resident **Manager group per project**, beside that project's specialist
+groups and state. For an IV Dataset this is the Dataset Manager; for a client
+Concierge it is the client-level coordinator. No fleet-wide manager-of-managers
+is required initially. Cross-project access is explicit, not inherited from
+network reachability or a shared provider account.
 
-Deploy **one resident manager on each project-specific VM**, beside that
-project's workers and state. It runs as an independent systemd service, not as
-a foreground process whose lifetime depends on an open terminal. A conversation
-client in a Rex block is an interface to that service, not the service itself.
+The owner retains authority over objectives, material scope/budget changes,
+capability grants, and required release approvals. Manager may coordinate the
+approved plan within reviewed permissions. It cannot approve for the owner,
+override independent Audit, publish, or read all specialist memories by default.
 
-| Layer                     | Responsibility                                                         |
-| ------------------------- | ---------------------------------------------------------------------- |
-| Resident project manager  | Policy, routing, working memory, task tracking, notifications          |
-| Execution agents          | Planning, adversarial review, implementation, integration              |
-| Session interface         | Rex project session remotely; manager conversation clients on the Macs |
-| Project and machine state | Repository, worktrees, durable runtime records, VM and network         |
+**Own management artifacts; delegate specialist implementation and independent
+review.** This replaces the overly restrictive "notice, route, notify only"
+description. Producing a project brief, assignment, decision record, or status
+update is management work, not a forbidden implementation task.
 
-The Mac management workspace aggregates conversations with these managers. It
-is **not another coordinating agent**. No fleet-wide manager-of-managers is
-required initially; cross-project delegation needs explicit permission.
+The runtime must remain responsible when terminals disconnect. It may use
+supervised services and short-lived agent turns rather than one permanently
+running model conversation. The Mac workspace is a collection of clients to
+these managers, not another coordinating agent.
 
-## Specification
+## 2. Responsibilities and owned artifacts
 
-### A. Role — what it is
+| Responsibility                 | Owned artifact or observable result                                          |
+| ------------------------------ | ---------------------------------------------------------------------------- |
+| Maintain intent                | Approved objectives, scope/non-goals, requirements, acceptance criteria      |
+| Plan delivery                  | Versioned plan, milestones, dependencies, prioritized backlog                |
+| Assign and supervise           | Bounded assignments, owners, results, blockers, pending approvals            |
+| Allocate effort                | Concurrency/retry/budget limits, stop conditions, escalation recommendations |
+| Coordinate independent review  | Exact revision/candidate under review, findings and disposition              |
+| Keep decisions explicit        | Rationale, alternatives, owner decisions, unresolved assumptions             |
+| Maintain project documentation | Current overview, technical docs, runbooks, release notes and evidence links |
+| Report honestly                | Distinct configured, observed, tested, blocked, and unverified states        |
 
-| #   | Attribute                                                                                                                   | Acceptance test                                                                                                                |
-| --- | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| 1   | **Manager, not worker.** Notice, consult, route, record, notify. Delegate planning and project changes to execution agents. | The manager's interface manages assignments and approvals; it does not implement tasks in worker checkouts.                    |
-| 2   | **Standing presence.** Accept conversations and heartbeat events; maintain continuity between interactions.                 | Closing every client leaves the manager and assigned work running; the manager can notify the owner when a decision is needed. |
+Manager detects stalled work, conflicting assignments, repeated failed attempts,
+and scope changes. It brings the owner a concise account and recommendation
+rather than silently expanding authority or retrying indefinitely. Specialist
+reports carry enough evidence for coordination without exposing private scratch
+context or credentials.
 
-### B. Form — how it is built
+## 3. Delivery lifecycle and definition of done
 
-| #   | Attribute                                                                                                                                                                | Acceptance test                                                                                                    |
-| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
-| 3   | **Thin.** Aim for a few hundred lines of coordination code (~500 as a design budget, not a reason to omit recovery or safety). Prefer rules or a cheap model for triage. | Idle operation is inexpensive; growth triggers review for duplicated worker, storage, or transport functionality.  |
-| 4   | **Replaceable and worker-independent.** Stable interfaces over product internals; no dependency on Shelley becoming the resident layer.                                  | Replace a worker or conversation client without losing project identity, memory, assignments, or approval history. |
+Manager establishes approved scope, commissions specialist planning/challenge
+where useful, sequences assignments, routes review findings, and coordinates
+acceptance. For dataset and concierge publication, the canonical path is the
+[isolated group handoff](agent-group-operating-model.md#handoff-and-release-contract),
+not a generic "integrator may deploy" workflow.
 
-### C. Governance — what keeps it safe
+Worker success means **ready for verification**, not automatically done. The
+assignment's completion contract identifies the exact artifacts/revisions,
+required independent review, tests, documentation/runbook updates, publication
+or deployment state if relevant, and disclosed limitations. Keep implemented,
+merged, audited, approved, published, and consumer-verified separate.
 
-| #   | Attribute                                                                                                                                                           | Acceptance test                                                                                                                            |
-| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| 5   | **Policy-constrained.** Reviewed policy data defines local worker permissions, ask-first actions, budgets, quiet hours, and any cross-project grants. Default deny. | The manager cannot modify its effective policy or authorize its own exceptions; sibling VMs are not implicitly trusted delegation targets. |
-| 6   | **Pinned runtime, reviewable learning.** Platform changes use normal pin-and-review; durable knowledge and skills evolve through reviewed changes.                  | No runtime self-modification or unreviewed executable skills. Ordinary conversation and task-state writes remain allowed.                  |
+Record decisions and results as they happen. Periodic retrospectives propose
+reusable memory/skill improvements; weekly distillation is not the only way a
+manager may learn that a task completed or the owner changed a priority.
 
-### D. State — what it knows
+### Resident lifecycle: remember, wait, wake, act, record
 
-| #   | Attribute                                                                                                                                                                                        | Acceptance test                                                                                                                        |
-| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
-| 7   | **Project-local working memory.** Bounded curated files (~1–2k tokens) hold priorities, decisions, preferences, and pointers to active tasks. Distribute shared policy/preferences consistently. | Triage needs only small local context; memory changes have provenance; a client reconnect does not create a new manager.               |
-| 8   | **Archives behind it.** Read AgentsView for session history and Entire for code provenance. Qualified event and health interfaces may supply triage hints.                                       | Archive failure does not erase active task state or prevent local coordination; hints are checked against authoritative worker status. |
-| 9   | **Learning by batch distillation.** Recall is a candidate source, subject to qualification. Owner-approved candidates become risk-tiered PRs for project memory and skills.                      | Candidate approval and PR approval are separate gates; executable or mutating changes require explicit review.                         |
+1. **Remember:** persist approved commitments, task identities, state, and pending
+   decisions, with pointers to authoritative artifacts.
+2. **Wait:** do not invoke a model continuously merely to remain present.
+3. **Wake:** accept an owner message, worker event, or scheduled reconciliation.
+4. **Act:** inspect actual state and take a bounded authorized next step, ask for
+   a decision, or do nothing. Never infer permission from the wake-up itself.
+5. **Record:** persist the outcome and next responsibility, then wait again.
 
-## Execution and authentication boundaries
+A reconnect must address the existing manager, not create another owner of its
+assignments. On restart, reconcile workers, receipts, and pending approvals
+before resuming; do not blindly repeat uncertain side effects. The scheduler
+and ledger must retain responsibility across turns even if each turn uses a
+fresh model context. Conversation persistence alone is not this lifecycle.
 
-Claude Code and Codex are the proposed subscription-backed workers, through
-provider-supported interfaces and authentication. Shelley remains an optional
-worker/workbench where its inference access and deployment are qualified. A
-product running on a host does not by itself establish subscription entitlement
-or inclusion in a mobile app or portal.
+## 4. Project website and communication
 
-The design must not depend on copying CLI/Keychain tokens into another product,
-or assume that an independent OAuth flow establishes provider authorization.
-Validate each provider/product combination separately. This is a design gate,
-not a legal determination about the existing fork. It applies to the resident
-manager's own inference access as well as its workers.
+**Every project manager owns keeping its project documentation website current.**
+It can write management documentation and delegate specialist pages, builds, and
+publication. Ownership does not grant deployment privileges or waive review.
 
-Define a small worker-adapter contract: **start, resume, inspect, cancel,
-collect results, and surface approval requests**. Keep assignment IDs distinct
-from conversation IDs and Rex object IDs. Mark manager-owned assignments so
-workers do not recursively create managers or duplicate delegations.
+| Website section         | Reader's question                                                   |
+| ----------------------- | ------------------------------------------------------------------- |
+| Overview                | What is the project for, and what is out of scope?                  |
+| Status                  | What is underway, blocked, completed, or awaiting a decision?       |
+| Plan and milestones     | What happens next, with which dependencies and acceptance criteria? |
+| Decisions               | What was decided, why, and what remains unresolved?                 |
+| Technical documentation | How do interfaces, schemas, and important assumptions work?         |
+| Operations              | How do we run, test, deploy, recover, and troubleshoot?             |
+| Releases and evidence   | What actually shipped, with which checks and known limitations?     |
 
-The contract also delivers approval or rejection, bound to the assignment,
-requested action, and revision. Reject stale decisions; duplicate delivery must
-not execute an action twice. Enforce policy outside manager and worker write
-authority: prompt instructions alone are not a permission boundary, and a
-manager cannot delegate a policy change it may not make itself.
+Generate status from the operational ledger where possible; render authored
+content from versioned files. The site is a **published view**, not a second
+manually synchronized task database. Show observation times and source/release
+revisions; stale or unavailable inputs must not appear current and healthy.
+Use runtime-generated evidence timestamps rather than model-invented times.
 
-Coordination is local by default. Fleet inventory and human access must not
-depend on a vendor portal discovering every host. Rex and Zed are replaceable
-interfaces, not the authority for project existence or task completion.
+Classify audiences before publication. Do not expose private group memory,
+transcripts, credentials, drafts, or cross-entitlement content. Internal project
+status publication may be preauthorized by reviewed policy; authoritative client
+content must still follow its Audit/approval/Publish path. A "docs update" must
+not bypass that path or broaden access. Validate builds/links/content scope and
+preserve the prior working release on failure.
 
-## Memory, operational state, and archives
+The three interfaces have different jobs: **conversation** directs work,
+**Rex** exposes permitted running activity, and the **website** explains the
+project without requiring an agent interrogation. Select a separate notification
+channel for owner decisions when no terminal is connected; recorded delivery is
+not proof that a human received a notification.
 
-The earlier phrase "the only store it owns" was too restrictive. Separate:
+## 5. State and sources of truth
 
-- **Curated working memory:** small, portable, git-versioned knowledge, updated
-  through the review process.
-- **Operational state:** durable conversations, task/worker identifiers,
-  statuses, pending approvals, and delivery/reconnect cursors. Updated during
-  operation, without requiring a PR per message. Storage format and recovery
-  implementation remain open; neither terminal scrollback nor an archive
-  search is the authoritative task ledger.
-- **Archives:** AgentsView and Entire, consulted with project-appropriate
-  read access. They provide history and evidence, not control authority.
+| State                | Purpose and boundary                                                                         |
+| -------------------- | -------------------------------------------------------------------------------------------- |
+| Project knowledge    | Approved charter, plans, decisions, technical docs and runbooks in versioned artifacts       |
+| Operational ledger   | Durable assignments, dependencies, worker IDs, results, approvals and delivery state         |
+| Group working memory | Small curated orientation and pointers; private to that group, not a shared fleet scratchpad |
+| Archives             | Authorized session history and code provenance; evidence, not control authority              |
+| Website              | Audience-appropriate published presentation of selected knowledge and status                 |
 
-The [AgentsView guide](https://www.agentsview.io/guide/) for v0.45.0 describes
-experimental Recall with evidence and approval, live-message SSE, session-health
-analysis, and Claude Code/Codex memory plugins. Proposed integration:
+A ~1–2k-token working-memory budget is an orientation target, not a ceiling on
+project knowledge. Runtime conversations and task state need not be committed or
+reviewed per message. Secrets and raw private histories do not belong in public
+project Git history. Version approved reusable guidance; keep runtime evidence
+in its authorized store, with backup and retention rules.
 
-1. Use Recall for candidate lessons; owner approval is the first gate, followed
-   by PR review for changes to memory or skills. The manager's archive access
-   remains read-only; approval belongs to the owner.
-2. Treat streamed messages and health analysis as optional triage inputs. They
-   are **not yet qualified as reliable worker-completion events**, and the guide
-   does not establish that health scores are pushed over SSE. Validate event
-   semantics, freshness, reconnect/replay, and cost before relying on them.
-3. Let qualified worker memory plugins retrieve relevant history. Assignments
-   must still carry their scope, plan revision, and acceptance criteria.
+AgentsView and Entire remain optional history/provenance sources, with access
+scoped so archive searches cannot bypass group isolation. Recall can supply
+learning candidates; it does not grant permission to alter skills or policy.
+Event feeds and health hints must be qualified for freshness/replay and checked
+against authoritative worker state. No archive, issue tracker, or forge is a
+prerequisite for the basic resident mechanism demonstrated by the core test.
 
-The repository currently pins AgentsView 0.43.0. Qualify the required interfaces
-and any pin bump separately; the guide alone does not establish when each
-feature first shipped. Periodic reconciliation against worker status remains
-necessary even if an event feed is adopted.
+## 6. Delegation, permissions, and recovery
 
-## Replacement criteria
+Use the [group model](agent-group-operating-model.md) for responsibilities and
+handoffs rather than sharing private conversations. The worker interface should
+support start, resume, inspect, cancel, collect results, and surface/deliver
+approval decisions. Bind decisions to assignment, requested action, and revision;
+reject stale decisions and prevent repeated delivery from duplicating actions.
+Keep task, artifact, conversation, group, and Rex object identities distinct.
 
-Retire components when a supported alternative meets their requirements, not
-according to an assumed Shelley roadmap or release order.
+Policy enforcement belongs outside manager/worker write authority. Neither
+Manager nor a delegated agent can change effective permissions, protected
+checks, or approval requirements. Fleet runtime changes remain pinned/reviewed;
+no unreviewed executable self-modification. Assess risk by effect, not extension:
+mutating SQL is not a prose-only fast lane.
 
-| Component                   | Replacement must preserve                                        |
-| --------------------------- | ---------------------------------------------------------------- |
-| Conversation client         | Remote identity, durable history, reconnect, approval handling   |
-| Notifications and heartbeat | Delivery state, quiet hours, recovery after downtime             |
-| Worker adapters             | Supported authentication, task identity, results, cancellation   |
-| Coordination and policy     | Project scope, enforced permissions, owner approval gates        |
-| Memory and runtime storage  | Portable knowledge, exportable history, recoverable active tasks |
+Manual owner intervention must be reconciled with the ledger before manager
+control resumes, without bypassing the group's boundaries. Use finite retries,
+concurrency limits, and explicit failure states. Treat human absence, archive
+outage, failed credential access, and ambiguous worker completion as conditions
+to handle—not permissions to guess, retry forever, or change providers silently.
 
-A future Shelley enhancement could replace a component, but so could another
-implementation. The aim is less custom code without surrendering continuity or
-policy enforcement.
+## 7. Runtime and replacement requirements
 
-## Design influences and learning boundary
+Use an existing runtime where it meets the contract; do not build an artificial
+500-line manager. Keep custom integration glue small. Cheap checks can handle
+routine supervision; substantial judgment may need a capable model, invoked only
+when useful.
 
-The earlier discussion borrowed bounded-memory conventions from Hermes, size
-discipline from NanoClaw, and policy-gating ideas from cmesh. These are design
-influences, not dependencies or commitments to deploy those projects.
+Runtime, model, and access/billing are separate choices. The manager and workers
+must use qualified, supported subscription access; no automatic paid-API
+fallback. The design must be portable across frontier providers, not dependent
+on Shelley, Claude, Codex, or one vendor portal becoming the entire manager.
+A working login alone is not a billing/authorization qualification.
 
-Fleet discipline protects the platform layer; project-specific learning belongs
-in reviewed memory and `skills/` changes. Batch distillation is delegated work,
-not permission for a manager to rewrite itself. Risk-tier review concerns what
-a change can do, not its extension: SQL that mutates data is not a prose-only
-fast-lane change.
+Provider handover must preserve approved artifacts, assignments, pending
+approvals, and recoverable project context. It need not transfer a proprietary
+native conversation verbatim. Retire components when a supported replacement
+preserves those contracts, not according to an assumed product roadmap.
 
-## Open decisions
+### Decided, configured, tested, outstanding
 
-- **Manager runtime and inference:** choose an implementation and a supported
-  authentication path without assuming a Shelley dependency.
-- **Conversation client:** select or build durable remote reconnect, consistent
-  multi-client history, approval routing, and duplicate-command protection.
-- **Policy:** define local permissions, cross-project opt-ins, review tiers,
-  budgets, notification channels, and quiet hours.
-- **State:** specify operational persistence, backup/restart recovery, and
-  bounded-memory curation rules.
-- **Qualification:** validate AgentsView integrations and the Rex deployment
-  gates in [Rex-Based Project Management](rex-based-project-management.md).
+- **Decided:** project-local Manager groups, specialist isolation, management and
+  website ownership, wait–wake–act behavior, and replaceable interfaces.
+- **Configured:** NanoClaw Manager exists on `iv-cmg-concierge`; that does not
+  imply a qualified fleet-wide project-manager rollout.
+- **Tested:** [one bounded synthetic scheduled wake and read-only reconnect](nanoclaw-core-loop-test.md),
+  without Rex. No automatic terminal replay or absent-user notification was proved.
+- **Outstanding:** specialist-reply wake-up, protected release/approval gates,
+  restart recovery, supported multi-provider access and exhaustion behavior,
+  website maintenance/publication, and the Rex interaction paths. The
+  [Concierge contract](cmg-concierge-publication-contract.md) records its narrower
+  implementation handoff; no live roles or permissions change in this revision.

@@ -2,181 +2,155 @@
 title: "Rex-Based Project Management"
 ---
 
-**Status: proposed organization, not deployed.** Recorded 2026-10-13. Rex Linux
-server availability and qualification, and a reconnectable resident-manager
-client, are implementation dependencies—not capabilities installed by this
-repository today.
+**Status: proposed interface, revised 2026-10-14; not deployed or qualified.**
+Define isolated agent groups first, then use Rex to expose their conversations
+and permitted activity. Rex does not supply the manager's memory, authority,
+or wait–wake–act lifecycle.
 
-**One manager per project. Multiple workers beneath each manager. One convenient
-workspace for the owner to talk to them all.**
+Read [Agent Group Operating Model](agent-group-operating-model.md) for group
+boundaries and [Project Manager Agent](resident-layer.md) for responsibilities,
+project website ownership, and persistence. The
+[NanoClaw core-loop test](nanoclaw-core-loop-test.md) passed without Rex; it did
+not qualify remote interactive access to all specialists.
 
-The [Resident Layer](resident-layer.md) specification defines manager behavior,
-policy, state, and replacement criteria. This page defines where that layer
-runs and how humans access it; Rex organizes sessions, not project decisions.
+## Two workspaces
 
-## Two workspaces, different purposes
-
-| Workspace          | Runs where                  | Purpose                                                           |
-| ------------------ | --------------------------- | ----------------------------------------------------------------- |
-| Project session    | Project-specific exe.dev VM | Access one project's manager, planning, review, workers, and logs |
-| Management session | A Mac's local Rex server    | Arrange clients connected to managers on several project VMs      |
+| Workspace          | Location                 | Purpose                                                               |
+| ------------------ | ------------------------ | --------------------------------------------------------------------- |
+| Project session    | Project-specific VM      | Expose that project's isolated groups through group-aligned windows   |
+| Management session | A Mac's local Rex server | Arrange conversation clients to Manager groups on several project VMs |
 
 Our convention is **one project VM → one Rex server → one project session →
-multiple windows and blocks**. This is an organizational choice, not a Rex
-restriction. It does not introduce a central manager-of-managers.
+group-aligned windows → conversation/task blocks**. It is a proposed convention,
+not a Rex restriction. It introduces neither a second manager above NanoClaw's
+Manager nor a fleet-wide manager-of-managers.
 
-## Rex vocabulary
+The [Rex CLI taxonomy](https://www.superlogical.com/rex/docs/automate/cli)
+distinguishes server-owned sessions, windows, application blocks, and connected
+clients. A Rex workspace is not an LLM conversation or an isolation boundary.
+Preserve durable group/conversation/task identities separately from Rex object
+IDs; a changeable tab label must not determine authority.
 
-The [Rex CLI guide](https://www.superlogical.com/rex/docs/automate/cli) describes
-sessions as related work retained by a server, windows as tabs holding block
-layouts, and blocks as applications (currently terminals). Clients connect to
-the server. Objects have stable IDs and changeable labels; automation should
-save IDs rather than depend on labels or tab positions.
+## Group-aligned project windows
 
-For this design, a **Rex session is a workspace**, not an LLM conversation. A
-block can host a CLI agent or a client to a resident manager; neither the model
-nor its conversation identity is defined by the block's name.
+| IV Dataset window | Client Concierge window | What the blocks expose                                                                  |
+| ----------------- | ----------------------- | --------------------------------------------------------------------------------------- |
+| **Manager**       | **Manager**             | Existing manager conversation, approved plan, reported status and decisions             |
+| **Write**         | **Curate**              | Assignments and permitted workspace/log views within the producing group                |
+| **Audit**         | **Audit**               | Independent review conversations, protected checks, findings and receipts               |
+| **Publish**       | **Publish**             | Approved release requests, narrow promotion interface, receipts and rollback references |
+| **Test**          | **Test**                | Scoped consumer scenarios and actual test results                                       |
 
-## Each project VM
+Every window refers to a distinct group's persistent context. Seeing windows
+side by side does not make their memories available to one another. The human
+owner's ability to inspect multiple groups is not blanket tool access for
+Manager or for the other agents.
 
-The VM owns:
+Task blocks may come and go inside a group. Name them for assignments rather
+than models; a new block does not necessarily mean a new agent group. Where
+concurrent code writers need separate worktrees, arrange those within authorized
+workspace boundaries. Worktrees and terminal panes are not substitutes for
+isolating Audit from Write/Curate.
 
-- One resident project-manager service, independent of terminal connections.
-- Planning, review, execution, and integration agents.
-- The repository and an isolated Git worktree/branch for each concurrent writer.
-- Durable conversations, task/approval records, and bounded working memory.
-- The proposed Rex server and project session.
+### Why the previous generic layout changed
 
-| Window                    | Blocks                               | Responsibility                                       |
-| ------------------------- | ------------------------------------ | ---------------------------------------------------- |
-| **Manager**               | Resident-manager conversation client | Assign priorities, discuss status, resolve decisions |
-| **Plan**                  | Fable + shell                        | Develop and revise the plan                          |
-| **Challenge**             | Astra + shell                        | Adversarial review of plans and changes              |
-| **Task: ingestion**       | Opus + tests/logs                    | Execute a bounded assignment                         |
-| **Task: transformations** | Sonnet + tests/logs                  | Execute another independent assignment               |
-| **Task: validation**      | Sol + tests/logs                     | Execute another independent assignment               |
-| **Integrate**             | Designated integrator + test shell   | Combine reviewed changes and verify the result       |
+"Manager / Plan / Challenge / Tasks / Integrate" mixed persistent identities,
+activities, and temporary assignments. It is no longer the default group layout.
+Planning, challenging, and integrating are activities assigned to an appropriate
+group or explicitly approved specialist. A model offering advisory criticism
+is not automatically the independent Audit authority for a frozen publication.
 
-Model names express the owner's preferred role assignments, not a claim that
-every CLI/subscription offers each model. Qualify model access through supported
-authentication; changing a worker does not change the task's identity.
+For other software projects, decide which contexts must remain independent
+before choosing group names and windows. Do not flatten an established dataset
+or concierge topology to fit a universal terminal template.
 
-Keep planning/review windows across work cycles; create and close task windows
-as assignments change. Name execution windows for **tasks, not models**.
+Fable, Astra, Opus, Sonnet, and Sol describe preferred reasoning assignments,
+not group names or permissions. Model availability and subscription access must
+be qualified; replacing a model cannot broaden a group's authority or cause
+another group to inherit its private memory.
 
-The Manager block connects to an independently supervised service. Closing it
-must not terminate that manager. Conversely, closing an execution block may
-terminate its foreground worker: collect results and stop workers deliberately,
-not by treating window cleanup as harmless disconnection.
+## Mac management session
 
-## Plan, challenge, execute, review, integrate
+| Local window      | Local block connects to                           |
+| ----------------- | ------------------------------------------------- |
+| **Project A**     | Existing Manager group on VM A                    |
+| **Project B**     | Existing Manager group on VM B                    |
+| **CMG Concierge** | Existing Manager group on the client Concierge VM |
 
-1. **Plan:** the owner and Fable establish scope, dependencies, task boundaries,
-   and acceptance criteria in a versioned plan.
-2. **Challenge:** Astra reads the plan and relevant project context, identifies
-   failure cases and missing tests, and returns findings. Fable revises; the
-   owner approves the execution scope.
-3. **Execute:** assign independent tasks to workers, each with a plan revision,
-   worktree/branch, scope, and completion contract: commits, tests, unresolved
-   issues. Dependent tasks wait for their prerequisites.
-4. **Review:** Astra examines explicit commits/diffs against acceptance criteria;
-   findings return to the responsible worker.
-5. **Integrate:** one designated integrator combines approved changes and runs
-   cross-task tests before the owner's final approval.
+Alternatively, put several manager clients side by side in one local window.
+These are ordinary local terminal clients with remote connections, not remote
+Rex blocks transplanted into a local session. No cross-server block composition
+is required, and opening a client must not start a duplicate Manager.
 
-Initially the owner can coordinate this manually. The resident manager later
-tracks and routes the same workflow within policy; it does not become the
-planner, reviewer, and implementer itself.
+A long-running connection is convenient, not a lifecycle requirement. Sleeping
+or disconnecting the Mac must leave remote responsibilities intact. Another Mac
+may arrange its own clients to the same managers; identical layouts, focus, and
+simultaneous input behavior are not assumed.
 
-**Files and commits are handoffs; terminal scrollback is not.** Separate blocks
-do not isolate filesystem changes. Use worktrees for concurrent writers and
-identify the exact plan revision or commit under discussion. Keep plan/task
-IDs, worker conversations, and Rex object IDs separately mapped.
+Rex provides convenient human access, not a prerequisite for persistence. A
+functional basic conversation client is sufficient; a polished TUI is not the
+criterion that selects the resident runtime.
 
-## The Mac management session
+## Drill into a group without bypassing its boundary
 
-A local Rex management session contains ordinary terminal clients with
-long-running connections to the remote managers:
+Connect to the remote project session to inspect a particular group's work.
+Every block must use an approved interaction path to the existing group/session.
+**Do not launch a replacement host-side CLI with broader credentials simply to
+make a containerized worker convenient to access.** A shell adjacent to an Audit
+conversation is not automatically authorized to modify its workspace or tests.
 
-| Local window  | Local block connects to  |
-| ------------- | ------------------------ |
-| **Project A** | Resident manager on VM A |
-| **Project B** | Resident manager on VM B |
-| **Project C** | Resident manager on VM C |
+The NanoClaw-to-Rex conversation/status path is still unqualified. We must prove
+that inspection and intervention address the same governed work, not duplicate
+workers or a parallel ungoverned execution system.
 
-Alternatively, place several manager blocks side by side in one local window.
-The layout is a preference, not part of the resident protocol.
+Read-only inspection needs no coordination handoff. Before changing an assignment,
+issuing instructions, approving an action, or cancelling work, put the affected
+assignment into owner-controlled mode. Record the intervention and reconcile
+actual worker state before Manager resumes control. Any required approval and
+group isolation still apply during manual intervention.
 
-These are **local blocks with remote connections**, not blocks transplanted from
-remote Rex servers. This design needs neither cross-server block composition
-nor a tmux-style Rex attachment command inside another terminal. It does need
-a selected or purpose-built resident conversation client and authenticated
-transport to each manager.
+**Management workspace = across projects. Project session = inside one project.
+Group window = one isolated context.** Zed remains an optional editing/review
+workbench; neither Zed integration nor a vendor portal listing every VM is a
+precondition for this organization.
 
-This is the primary workspace for assigning work, setting priorities, approving
-plans, checking progress, and answering questions across projects. Opening a
-client must connect to the existing manager, not start another copy.
+## Publication and documentation access
 
-## Drill into a project
+The group workflow is specified in the
+[operating model](agent-group-operating-model.md#handoff-and-release-contract).
+Rex exposes its progress; it does not grant publishing authority. For CMG,
+Publish changes approved information available to the restricted MCP service,
+not its entitlement policy or executable code.
 
-For direct work with a planner, reviewer, executor, or logs, use a Rex client to
-connect to that VM's project session, subject to remote-access qualification.
-Do not start duplicate workers merely to inspect existing work.
+The project website is the manager-maintained published account of status,
+plans, decisions, technical documentation, operations, and results. Link to it
+from the workspace when convenient. It must not expose private group context
+or act as a second independent task ledger.
 
-Direct intervention must not compete with manager instructions. Put an affected
-assignment into owner-controlled mode before changing scope, approving an action,
-or cancelling work; record the outcome in the task ledger and reconcile worker
-state before returning control to the manager. Read-only observation needs no
-handoff.
+## Qualification gates
 
-**Management workspace = across projects. Project session = inside one project.**
-
-Zed remains an editing and code-review workbench. Neither Zed/Rex integration
-nor an exe.dev/Shelley portal listing every host is a prerequisite for this
-organization. Mobile access is optional and needs its own qualification.
-
-## Continuity and recovery contract
-
-These are requirements for the resident implementation, not claims that Rex
-implements an agent protocol:
-
-- Disconnecting or sleeping the Mac does not stop remote managers or workers.
-- Reconnection resumes the same manager conversation and replays missed output.
-- A second Mac can connect without creating a duplicate manager. Serialize or
-  deduplicate concurrent commands and approvals explicitly.
-- Authoritative conversation and task state stays on the project VM, not in a
-  local terminal's scrollback. A local layout can be recreated without losing it.
-- Unanswered approvals remain pending while disconnected; do not silently grant
-  them. Choose an out-of-band notification channel for time-sensitive decisions.
-- VM/service restart recovery is separate from client-disconnect persistence:
-  restore the ledger, reconcile worker state, and avoid blindly rerunning tasks.
-- Shared preferences and policies are distributed consistently; each manager's
-  authority stays project-local unless cross-project access is explicitly granted.
-
-Identical local layouts across Macs, shared focus, and simultaneous input are
-not assumed. Each Mac can arrange its own clients to the same remote managers.
-
-## Implementation and qualification gates
-
-The [Rex installation guide](https://www.superlogical.com/rex/docs/installation),
-checked 2026-10-13, limits public testing to macOS and describes Linux servers
-as internal. Do not treat the proposed VM layout as currently deployable.
+This design depends on a qualified Linux Rex server and approved per-group
+interaction clients. The installation documentation reviewed on 2026-10-13
+limited public testing to macOS; that historical observation is not a current
+release guarantee. Check the official installation documentation when qualifying
+an actual release rather than assuming availability from this design.
 
 Before rollout:
 
-1. **Linux Rex:** qualify a released server on exe.dev and separately on any
-   Ubuntu-based Apple Container target: install, supervised startup, resource
-   requirements, authenticated remote access, and disconnect/reconnect behavior.
-2. **Resident service and client:** implement or select durable identity,
-   history, task state, multi-client consistency, approval routing, recovery,
-   and a supported inference/authentication path.
-3. **Worker adapters:** qualify start/resume/status/cancel/results/approvals,
-   available models, worktree isolation, and plan-to-task handoffs.
-4. **Canary:** run one project end to end; sleep/disconnect the Mac, reconnect
-   from another Mac, recover a pending approval, and verify no duplicate work.
-   Test service restart recovery separately.
-5. **Fleet rollout:** pin and provision the qualified components; keep shared
-   policy/preferences consistent without granting managers fleet-wide authority.
+1. **Server:** qualify installation, supervised startup, authenticated remote
+   access, resource limits, and disconnect behavior on exe.dev; qualify any
+   Ubuntu-based Apple Container target separately.
+2. **Group interfaces:** verify the same governed conversations/workers are
+   reached; no memory, filesystem, archive, or credential boundary is bypassed.
+3. **Manager continuity:** verify durable history, missed-result recovery,
+   concurrent-client command handling, pending approvals, and no duplicate work.
+4. **Resident lifecycle:** qualify worker-event wake-up and separately approved
+   restart recovery. Do not confuse Rex attachment with agent recovery.
+5. **Canary:** exercise one synthetic group handoff, independent audit, protected
+   approval, publication, and consumer test; disconnect and reconnect from another
+   Mac. Record configured controls separately from observed passes.
+6. **Rollout:** pin only qualified components and distribute shared policy without
+   granting managers blanket authority over sibling projects.
 
-No automatic VM retirement, model pin bump, or resident deployment is included
-in this documentation change.
+This is documentation only: no runtime upgrades, new permissions, agent-group
+renaming, VM changes, or automatic adoption of another agent framework.

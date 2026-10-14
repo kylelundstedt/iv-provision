@@ -21,8 +21,11 @@
 --include=development-platform.md
 --include=tailnet.md
 --include=registry.md
+--include=agent-group-operating-model.md
 --include=resident-layer.md
 --include=rex-based-project-management.md
+--include=cmg-concierge-publication-contract.md
+--include=nanoclaw-core-loop-test.md
 # retiring.md existed in the repo but was never on the site, while dotfiles docs
 # cite it as the runbook for the one unrecoverable fleet operation. That looked
 # like an oversight rather than intent.

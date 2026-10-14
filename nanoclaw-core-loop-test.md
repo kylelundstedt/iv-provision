@@ -11,7 +11,7 @@ separate task session, and that session recovered saved state and recorded
 completion. A subsequent read-only conversation recovered the result.
 
 This demonstrates the core resident mechanism, **not** complete qualification
-of the [Resident Layer](resident-layer.md) or the
+of the [Project Manager Agent](resident-layer.md) or the
 [Rex project-management workflow](rex-based-project-management.md).
 
 ## Environment and scope
