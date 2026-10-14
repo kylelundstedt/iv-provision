@@ -106,7 +106,7 @@ Also check `~/iv-provision.lock` after each VM: `python3_version`,
 ### Log in Claude Code and Codex once (Aperture releases)
 
 From the Aperture release on, both CLIs route through
-`http://aperture.dojo-sun.ts.net` on the VM's **own** subscription logins, so a
+`http://ai.dojo-sun.ts.net` on the VM's **own** subscription logins, so a
 VM without them fails: Codex with `401 Unauthorized` from
 `.../codex/responses`, Claude Code with `Not logged in`. Logins live in the
 home directory, so they survive later in-place upgrades; a recreated VM (Path B)
