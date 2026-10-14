@@ -14,6 +14,6 @@ model_provider = "aperture"
 
 [model_providers.aperture]
 name = "Aperture"
-base_url = "http://aperture.dojo-sun.ts.net/codex"
+base_url = "http://ai.dojo-sun.ts.net/codex"
 wire_api = "responses"
 requires_openai_auth = true

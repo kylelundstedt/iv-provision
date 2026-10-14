@@ -3,9 +3,15 @@
 Open work only. Release history → the table in `index.qmd`. Historical
 research (custom-image / arm64 era) → `registry.md`.
 
+## Aperture hostname rename (2026-10-14)
+
+- [ ] Tag `3.1.1` after merge, then re-provision every 3.1.0 VM at it
+      (`upgrade-vm`). Until then their Claude Code and Codex point at
+      `aperture.dojo-sun.ts.net`, which no longer resolves.
+
 ## Aperture gateway rollout (branch `feat/aperture-gateway`)
 
-Claude Code and Codex on every VM route through `http://aperture.dojo-sun.ts.net`
+Claude Code and Codex on every VM route through `http://ai.dojo-sun.ts.net`
 on their own subscription logins. The modified Shelley stays on its own
 subscription logins, outside Aperture, for now. Gates, in order:
 
