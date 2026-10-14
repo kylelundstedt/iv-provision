@@ -299,6 +299,8 @@ Unauthorized` forever with no alert (telnyx-vm and kgl-thoughts had both gone
 ## Resident project management
 
 - [ ] Qualify Linux Rex and the reconnectable manager client; implementation gates are in `rex-based-project-management.md`.
+- [x] Test NanoClaw's core loop without Rex: bounded PASS on 2026-10-14; see `nanoclaw-core-loop-test.md`.
+- [ ] Qualify specialist-reply wake-up and separately approved restart recovery; the core-loop test does not cover these.
 
 ## Evaluations
 
