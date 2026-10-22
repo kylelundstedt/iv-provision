@@ -153,7 +153,7 @@ team layer's contents — the skill set, MCP server list, and the shared
 and commit the result.
 
 Those manifests previously lived in
-[kylelundstedt/dotfiles](https://github.com/kylelundstedt/dotfiles) and were
+`kylelundstedt/dotfiles` (private) and were
 fetched at the commit recorded in `dotfiles-manifest.pin`, with dotfiles'
 `diff-provisioning.sh` policing drift. That arrangement made a fleet VM's
 provisioning depend on a personal repository — and the pin was silently wrong
