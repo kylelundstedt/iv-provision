@@ -1,0 +1,646 @@
+#!/usr/bin/env python3
+"""render-md-site [repo] — render a Markdown repo to <repo>/_site with Apex.
+
+Apex renders each Markdown document to an HTML fragment; this script supplies
+site navigation, per-page tables of contents, link rewriting, and the shared
+HTML shell. The output tree mirrors the source tree, so a/b/c.md becomes
+_site/a/b/c.html and existing relative links keep working.
+
+Usage:
+  render-md-site                       # render $PWD
+  render-md-site ~/gitlake --title GitLake --exclude 'agent_docs/**'
+  render-md-site --after-body mermaid  # inject the mermaid initialiser
+"""
+
+from __future__ import annotations
+
+import argparse
+import functools
+import html
+import posixpath
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path, PurePosixPath
+
+# Excluded everywhere unless --no-default-excludes. These are agent and
+# repo-hygiene files that are never site content; every _quarto.yml on the
+# fleet excludes the same set by hand.
+# Applied ALWAYS, even when --include names files explicitly. These are build
+# output and VCS internals; rendering them is never intended. iv-docs keeps its
+# Quarto profile output in _site-internal/ and _site-product/, and excluding
+# only "_site/**" made apex walk that previous HTML as source — 241 pages
+# instead of ~50.
+ALWAYS_EXCLUDES = [
+    "_site*/**",
+    ".quarto/**",
+    ".git/**",
+    ".entire/**",
+    "node_modules/**",
+    ".venv/**",
+    ".github/**",
+]
+
+DEFAULT_EXCLUDES = [
+    "AGENTS.md",
+    "CLAUDE.md",
+    "TODO.md",
+    "CHANGELOG.md",
+    # Nested READMEs stay excluded: they are directory notes, not site pages,
+    # and rendering them alongside an index.md in the same directory produces
+    # two near-duplicate pages. The ROOT README.md is handled separately -- see
+    # ROOT_README_FALLBACK below -- because it is the one document a repo
+    # reliably has, and a site whose landing page is a redirect stub is worse
+    # than one whose landing page is the README.
+    "**/README.md",
+]
+
+# A repo with no index.md but with a README.md gets the README as its landing
+# page. Previously the root was a `<meta refresh>` stub pointing at whatever
+# sorted first -- for fannie-sflpd-poc that was control/schemas/, i.e. the site
+# opened on a schema reference. README is what the author already wrote to
+# introduce the repo, so use it, and say so in the render output rather than
+# doing it silently. An explicit index.md still wins; so does an explicit
+# --exclude README.md.
+ROOT_README_FALLBACK = True
+
+# Mermaid, as a named preset rather than a pasted <script>: gitlake's
+# _quarto.yml carried this verbatim under include-after-body, and copying such
+# blobs between repos is how they rot. Kept byte-compatible with what that site
+# already served.
+AFTER_BODY_PRESETS = {
+    "mermaid": """<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({ startOnLoad: false, securityLevel: 'loose' });
+  let i = 0;
+  // Apex emits ```mermaid as <pre lang="mermaid"><code>; the
+  // other selectors cover renderers that use a class or lang attribute.
+  for (const el of document.querySelectorAll('pre[lang="mermaid"] > code, pre.mermaid, div.mermaid, pre > code.language-mermaid')) {
+    const host = el.tagName === 'CODE' ? el.parentElement : el;
+    try {
+      const { svg } = await mermaid.render('mmd-' + (i++), el.textContent.trim());
+      host.innerHTML = svg;
+    } catch (e) { console.error('mermaid render error:', e); }
+  }
+</script>""",
+}
+
+CSS = """
+:root { --fg:#1f2328; --bg:#fff; --muted:#59636e; --accent:#0969da; --border:#d1d9e0; --code-bg:#f6f8fa; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg:#e6edf3; --bg:#0d1117; --muted:#9198a1; --accent:#4493f8; --border:#3d444d; --code-bg:#151b23; }
+}
+* { box-sizing: border-box; }
+body { margin:0; font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+       color:var(--fg); background:var(--bg); }
+.layout { display:flex; align-items:flex-start; max-width:1400px; margin:0 auto; }
+nav.sidebar { flex:0 0 260px; padding:1.5rem 1rem; border-right:1px solid var(--border);
+              position:sticky; top:0; max-height:100vh; overflow-y:auto; }
+nav.sidebar .brand { font-weight:600; font-size:1.1rem; display:block; margin-bottom:1rem;
+                     color:var(--fg); text-decoration:none; }
+nav.sidebar ul { list-style:none; margin:0; padding:0 0 0 .5rem; }
+nav.sidebar li { margin:.15rem 0; }
+nav.sidebar a { color:var(--muted); text-decoration:none; font-size:.9rem; }
+nav.sidebar a:hover { color:var(--accent); }
+nav.sidebar a.current { color:var(--accent); font-weight:600; }
+nav.sidebar .section { font-weight:600; color:var(--fg); font-size:.85rem;
+                       text-transform:uppercase; letter-spacing:.03em; margin-top:1rem; }
+main { flex:1 1 auto; min-width:0; padding:2rem 2.5rem; max-width:52rem; overflow-wrap:break-word; }
+aside.toc { flex:0 0 200px; padding:2rem 1rem; position:sticky; top:0; max-height:100vh; overflow-y:auto; }
+aside.toc ul { list-style:none; margin:0; padding:0; }
+aside.toc a { color:var(--muted); text-decoration:none; font-size:.82rem; display:block; margin:.25rem 0; }
+aside.toc a:hover { color:var(--accent); }
+aside.toc .h3 { padding-left:.75rem; }
+a { color:var(--accent); }
+pre { background:var(--code-bg); padding:.85rem 1rem; overflow-x:auto; border-radius:6px;
+      border:1px solid var(--border); }
+code { background:var(--code-bg); padding:.15em .35em; border-radius:4px; font-size:.9em; }
+pre code { background:none; padding:0; }
+table { border-collapse:collapse; width:100%; overflow-x:auto; display:block; }
+th,td { border:1px solid var(--border); padding:.4rem .6rem; text-align:left; }
+th { background:var(--code-bg); }
+blockquote { border-left:3px solid var(--border); margin-left:0; padding-left:1rem; color:var(--muted); }
+img { max-width:100%; }
+h1,h2,h3 { line-height:1.25; }
+@media (max-width: 1000px) { aside.toc { display:none; } }
+@media (max-width: 700px) { .layout { flex-direction:column; } nav.sidebar { position:static; max-height:none;
+  flex:1 1 auto; width:100%; border-right:none; border-bottom:1px solid var(--border); } main { width:100%; padding:1.25rem; } }
+"""
+
+PAGE = """<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{title}</title>
+<style>{css}</style>
+{head_extra}
+</head><body>
+<div class="layout">
+<nav class="sidebar"><a class="brand" href="{root}index.html">{site_title}</a>{nav}</nav>
+<main>{body}</main>
+{toc}
+</div>
+{after_body}
+</body></html>
+"""
+
+
+@functools.lru_cache(maxsize=None)
+def _glob_re(pat: str) -> re.Pattern:
+    """Shell globstar semantics, which fnmatch does not provide.
+
+    fnmatch maps every `*` to `.*`, so `tpch/**/*.md` demands two literal
+    slashes and misses `tpch/index.md` — gitlake-examples rendered 1 page
+    instead of 6 because of exactly that. Here `**/` spans zero or more
+    directories and a single `*` stops at a slash, as in a shell.
+    """
+    i, out = 0, []
+    while i < len(pat):
+        if pat.startswith("**/", i):
+            out.append("(?:.*/)?")
+            i += 3
+        elif pat.startswith("**", i):
+            out.append(".*")
+            i += 2
+        elif pat[i] == "*":
+            out.append("[^/]*")
+            i += 1
+        elif pat[i] == "?":
+            out.append("[^/]")
+            i += 1
+        else:
+            out.append(re.escape(pat[i]))
+            i += 1
+    return re.compile("^" + "".join(out) + "$")
+
+
+def matches(rel: str, patterns: list[str]) -> bool:
+    for p in patterns:
+        if _glob_re(p).match(rel):
+            return True
+        # `dir/**` also means the directory itself and everything under it.
+        if p.endswith("/**") and (rel == p[:-3] or rel.startswith(p[:-2])):
+            return True
+    return False
+
+
+def discover(
+    root: Path,
+    includes: list[str],
+    user_excludes: list[str],
+    default_excludes: list[str],
+) -> list[Path]:
+    """An explicit --include beats a DEFAULT exclude; a user --exclude beats both.
+
+    ave-adapters' _quarto.yml renders README.md and TODO.md as site content,
+    which the defaults here exclude as repo hygiene. Applying defaults to an
+    explicitly named file would silently drop two thirds of that site — so when
+    --include is given it means "render exactly these".
+    """
+    out = []
+    for path in sorted(root.rglob("*")):
+        if not path.is_file() or path.suffix not in (".md", ".qmd"):
+            continue
+        rel = path.relative_to(root).as_posix()
+        # Quarto ignores files and directories whose name begins with "_" or
+        # "." in a project render — that is how drafts/_pressure_test.md stays
+        # out of iv-docs' site without appearing in any exclude list. Same
+        # convention here, or every repo would need to name its scratch files.
+        if any(part.startswith(("_", ".")) for part in Path(rel).parts):
+            continue
+        if matches(rel, user_excludes):
+            continue
+        if includes:
+            if matches(rel, includes):
+                out.append(path)
+            continue
+        if matches(rel, default_excludes):
+            continue
+        out.append(path)
+    return out
+
+
+def readme_as_index(
+    root: Path,
+    sources: list[Path],
+    user_excludes: list[str],
+    includes: list[str],
+) -> Path | None:
+    """Root README.md, when the repo has no index page of its own.
+
+    Returns the README to render AS index.html, or None to leave things alone.
+    Deliberately conservative, in the order a caller would expect to win:
+
+    - an authored index.md/index.qmd always beats the README;
+    - an explicit `--exclude README.md` opts out entirely (a user exclude beats
+      everything, which is the rule the rest of discover() already follows);
+    - a README the caller explicitly named in --include stays where they put it,
+      rather than being moved to the root under them.
+
+    `--include` does NOT otherwise suppress the promotion. It first did, on the
+    reasoning that "render exactly these" is a complete statement of intent --
+    but a caller reaches for --include to re-admit a file the defaults drop
+    (fannie-sflpd-poc re-including three nested READMEs that are real pages),
+    and having that silently cost them their landing page is a booby trap. The
+    two settings are independent: --include picks the page SET, this picks which
+    page is the ROOT. Conflating them made `--include '**/*.md'` -- a no-op
+    restatement of the default -- turn the site root back into a redirect stub.
+    """
+    if not ROOT_README_FALLBACK:
+        return None
+    if any(p.name in ("index.md", "index.qmd") for p in sources):
+        return None
+    if matches("README.md", user_excludes):
+        return None
+    # An include that NAMES the root README (rather than reaching it through a
+    # glob) is the caller asking for README.html at its own path. A glob like
+    # `**/*.md` is not that request -- it sweeps the README in incidentally, and
+    # treating that as intent is what produced both a stub index and a duplicate
+    # README.html on fannie-sflpd-poc.
+    if "README.md" in includes:
+        return None
+    readme = root / "README.md"
+    if not readme.is_file():
+        return None
+    return readme
+
+
+def first_h1(text: str) -> str | None:
+    """Return the first H1 outside fenced code blocks."""
+    in_fence = False
+    for line in text.splitlines():
+        if line.startswith(("```", "~~~")):
+            in_fence = not in_fence
+            continue
+        if not in_fence:
+            match = re.match(r"^#\s+(.+?)\s*$", line)
+            if match:
+                return match.group(1)
+    return None
+
+
+def strip_frontmatter(text: str) -> tuple[str, str | None]:
+    """Return (body, title). Frontmatter is stripped here, not by the renderer,
+    so the title is available for the nav and <title> before rendering."""
+    if not text.startswith("---"):
+        return text, None
+    end = text.find("\n---", 3)
+    if end == -1:
+        return text, None
+    fm, body = text[3:end], text[end + 4 :].lstrip("\n")
+    m = re.search(r'^title:\s*["\']?(.+?)["\']?\s*$', fm, re.M)
+    return body, (m.group(1) if m else None)
+
+
+# Unified mode preserves the fenced div/callout syntax used by the fleet.
+# Disable automatic IDs because Apex otherwise treats trailing `[bracket text]`
+# as an explicit ID and removes it from the visible heading. render-md-site adds
+# deterministic IDs itself while building the TOC. The other two flags preserve
+# GFM table headers, literal ~text~/^text^, and prose containing `::`.
+RENDERER = [
+    "apex",
+    "-m",
+    "unified",
+    "--no-ids",
+    "--no-relaxed-tables",
+    "--no-sup-sub",
+    "--no-one-line-definitions",
+]
+
+
+def render_fragment(md_text: str) -> str:
+    """Render one page to an HTML fragment, failing loudly on renderer errors."""
+    r = subprocess.run(RENDERER, input=md_text, capture_output=True, text=True)
+    if r.returncode != 0:
+        raise RuntimeError(f"apex failed: {r.stderr.strip()[:300]}")
+    return escape_mermaid(r.stdout)
+
+
+def escape_mermaid(out: str) -> str:
+    """Re-escape mermaid block contents so the diagram source survives the DOM.
+
+    mermaid.js reads `el.textContent`, so any markup inside the block must be
+    ESCAPED text, not real elements. gitlake's diagrams use
+    `A["staging branch<br/>of the mount"]` for node line breaks; a renderer that
+    passes that through raw makes the browser build a BR element, and
+    textContent then drops it, silently flattening every multi-line node label.
+    Quarto emits &lt;br/&gt; and renders correctly.
+
+    Renderers are inconsistent about which characters they escape inside a
+    fence, so this unescapes first and re-escapes from scratch rather than
+    trying to patch selectively.
+    """
+
+    def fix(m: re.Match) -> str:
+        open_tag, inner = m.group(1), m.group(2)
+        inner = re.sub(r"</?code[^>]*>", "", inner)  # apex sometimes wraps in <code>
+        return open_tag + html.escape(html.unescape(inner), quote=False) + "</pre>"
+
+    out = re.sub(r"(<pre[^>]*mermaid[^>]*>)(.*?)</pre>", fix, out, flags=re.S)
+    # Also accept lowdown-style output so older generated fragments remain safe.
+    return re.sub(
+        r'(<pre>)(<code class="language-mermaid">.*?)</pre>', fix, out, flags=re.S
+    )
+
+
+def rewrite_links(
+    body: str,
+    href: str,
+    root: Path,
+    rendered: set[str],
+    assets: set[str],
+    dead: list[tuple[str, str]],
+    readme_is_index: bool = False,
+) -> str:
+    """`href="x.md"` -> `href="x.html"`, leaving absolute and external URLs alone.
+
+    The output tree mirrors the source tree, so relative links keep resolving
+    without a link database or a base-url rewrite pass. What the mirror alone
+    cannot do is tell a link to a rendered page from a link to a page this site
+    excludes: `.md` -> `.html` is a pure string edit, and under Quarto the same
+    edit silently produced 404s whenever the target was excluded from
+    `project.render`. iv-docs shipped 14 such links (decisions/ -> spikes/,
+    agent_docs/) because both ends existed in the repo and neither Quarto nor a
+    reader's eye caught the gap.
+
+    So resolve every relative link against what this render actually produces:
+
+    - target is a rendered page          -> rewrite to .html
+    - target is a repo file, not a page  -> copy it into the site as an asset
+    - anything else                      -> unlink it, keep the text, report it
+
+    Unlinking rather than leaving a dead href is the honest failure: an excluded
+    page is deliberately not published, and a reader is better served by plain
+    text than by a link that 404s. `dead` collects (page, target) for the
+    caller's summary, so the operator sees what the exclusions cost.
+    """
+    page_dir = PurePosixPath(href).parent
+
+    def sub(m: re.Match) -> str:
+        url = m.group(1)
+        if re.match(r"^(https?:|mailto:|#|/|[a-z][a-z0-9+.-]*:)", url):
+            return m.group(0)
+        target, _, frag = url.partition("#")
+        if not target:  # bare "#anchor", already handled above
+            return m.group(0)
+        suffix = "#" + frag if frag else ""
+
+        # Resolve to a repo-relative posix path, the key both `rendered` and the
+        # source tree are addressed by. os.path.normpath collapses ".." without
+        # touching the filesystem, so links that escape the repo stay detectable.
+        # normpath already collapses "./" and "..", and returns "." for the
+        # root. No lstrip here: str.lstrip takes a SET OF CHARACTERS, not a
+        # prefix, so lstrip("./") turned "../decisions/x.md" into
+        # "decisions/x.md" -- silently eating the ".." this check exists to
+        # catch, and rewriting an out-of-tree link into a confident 404.
+        resolved = posixpath.normpath((page_dir / target).as_posix())
+        if resolved == "." or resolved.startswith(".."):
+            dead.append((href, url))
+            return "href=\x00"
+
+        if resolved.endswith((".md", ".qmd")):
+            as_html = resolved.rsplit(".", 1)[0] + ".html"
+            # When the root README was promoted to index.html, links to it --
+            # which every repo has, from nested docs pointing home -- follow it
+            # there instead of 404ing on a README.html that was never emitted.
+            #
+            # Gated on the promotion actually having happened. Without that
+            # guard this fired for any unrendered README, so ave-adapters (which
+            # HAS an index.qmd, leaving its README excluded as repo hygiene)
+            # turned a correctly-unlinked reference into a link back to the
+            # index -- a page linking to itself.
+            if readme_is_index and as_html == "README.html":
+                as_html = "index.html"
+                target = posixpath.relpath("index.html", page_dir.as_posix())
+                return f'href="{target}{suffix}"'
+            if as_html in rendered:
+                return f'href="{target.rsplit(".", 1)[0]}.html{suffix}"'
+            dead.append((href, url))
+            return "href=\x00"
+
+        # Not a page: a linked repo file (a schema, a spec, an image). Publish
+        # it verbatim at the mirrored path so the link keeps working.
+        src = root / resolved
+        if src.is_file():
+            assets.add(resolved)
+            return m.group(0)
+        dead.append((href, url))
+        return "href=\x00"
+
+    body = re.sub(r'href="([^"]+)"', sub, body)
+    # Drop the <a> wrapper around every link marked dead above, keeping its text.
+    return re.sub(r"<a\s+href=\x00[^>]*>(.*?)</a>", r"\1", body, flags=re.S)
+
+
+def extract_toc(body: str) -> tuple[str, str]:
+    """Add ids to h2/h3 and build the TOC from them."""
+    items = []
+    seen: dict[str, int] = {}
+
+    def sub(m: re.Match) -> str:
+        level, attrs, inner = m.group(1), m.group(2), m.group(3)
+        text = re.sub(r"<[^>]+>", "", inner).strip()
+        # apex already emits ids (--id-format gfm). Reuse them so the TOC links
+        # match the anchors readers get from GitHub, instead of inventing a
+        # second scheme that silently disagrees.
+        existing = re.search(r'\bid="([^"]+)"', attrs)
+        if existing:
+            slug = existing.group(1)
+            items.append((level, slug, text))
+            return m.group(0)
+        slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-") or "section"
+        seen[slug] = seen.get(slug, 0) + 1
+        if seen[slug] > 1:
+            slug = f"{slug}-{seen[slug]}"
+        items.append((level, slug, text))
+        return f'<h{level}{attrs} id="{slug}">{inner}</h{level}>'
+
+    body = re.sub(r"<h([23])([^>]*)>(.*?)</h\1>", sub, body, flags=re.S)
+    if len(items) < 2:
+        return body, ""
+    links = "".join(
+        f'<a class="h{lvl}" href="#{slug}">{html.escape(txt)}</a>'
+        for lvl, slug, txt in items
+    )
+    return body, f'<aside class="toc"><ul>{links}</ul></aside>'
+
+
+def build_nav(pages: list[tuple[str, str]], current: str, root_prefix: str) -> str:
+    """Sidebar grouped by directory — the repo's own structure, not a hand-kept list."""
+    groups: dict[str, list[tuple[str, str]]] = {}
+    for href, title in pages:
+        groups.setdefault(str(Path(href).parent) if "/" in href else "", []).append(
+            (href, title)
+        )
+    out = []
+    for section in sorted(groups, key=lambda s: (s != "", s)):
+        if section:
+            out.append(f'<div class="section">{html.escape(section)}</div>')
+        out.append("<ul>")
+        for href, title in sorted(
+            groups[section], key=lambda p: (not p[0].endswith("index.html"), p[0])
+        ):
+            cls = ' class="current"' if href == current else ""
+            out.append(
+                f'<li><a{cls} href="{root_prefix}{href}">{html.escape(title)}</a></li>'
+            )
+        out.append("</ul>")
+    return "".join(out)
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(
+        description="Render a Markdown repo to _site with Apex."
+    )
+    ap.add_argument("repo", nargs="?", default=".")
+    ap.add_argument(
+        "--title", default=None, help="site title (default: repo directory name)"
+    )
+    ap.add_argument("--out", default="_site")
+    ap.add_argument("--include", action="append", default=[], help="glob; repeatable")
+    ap.add_argument("--exclude", action="append", default=[], help="glob; repeatable")
+    ap.add_argument("--no-default-excludes", action="store_true")
+    ap.add_argument(
+        "--after-body",
+        action="append",
+        default=[],
+        help=f"preset ({', '.join(AFTER_BODY_PRESETS)}) or a file path",
+    )
+    ap.add_argument("--head", default=None, help="file of extra <head> HTML")
+    ap.add_argument(
+        "--no-md-twins",
+        action="store_true",
+        help="skip copying sources next to the HTML",
+    )
+    args = ap.parse_args()
+
+    root = Path(args.repo).resolve()
+    if not root.is_dir():
+        print(f"render-md-site: not a directory: {root}", file=sys.stderr)
+        return 2
+    if shutil.which(RENDERER[0]) is None:
+        print(
+            f"render-md-site: {RENDERER[0]} not on PATH (provisioned by iv-image)",
+            file=sys.stderr,
+        )
+        return 1
+
+    site_title = args.title or root.name
+    user_excludes = list(args.exclude) + ALWAYS_EXCLUDES + [f"{args.out}/**"]
+    default_excludes = [] if args.no_default_excludes else DEFAULT_EXCLUDES
+
+    sources = discover(root, args.include, user_excludes, default_excludes)
+    if not sources:
+        print(
+            "render-md-site: no markdown found after include/exclude", file=sys.stderr
+        )
+        return 1
+
+    after_body = "\n".join(
+        AFTER_BODY_PRESETS[a] if a in AFTER_BODY_PRESETS else Path(a).read_text()
+        for a in args.after_body
+    )
+    head_extra = Path(args.head).read_text() if args.head else ""
+
+    # Root README.md as the landing page when nothing else claims it. Rendered
+    # AS index.html, so links to "README.md" still resolve (the rewrite maps
+    # them alongside) and the site root is a real page rather than a redirect.
+    readme_index = readme_as_index(root, sources, user_excludes, args.include)
+    if readme_index is not None:
+        # Drop any incidental copy (a glob include can have swept it in) before
+        # putting it back at the front as the index, or the same file renders
+        # twice: once as index.html and once as README.html.
+        sources = [readme_index] + [p for p in sources if p != readme_index]
+        print("using README.md as the landing page (no index.md found)")
+
+    # Pass 1: titles, so every page's sidebar can name every other page.
+    entries = []
+    for src in sources:
+        rel = src.relative_to(root)
+        if src == readme_index:
+            rel = Path("index.md")
+        text = src.read_text(encoding="utf-8", errors="replace")
+        body_md, fm_title = strip_frontmatter(text)
+        authored_h1 = first_h1(body_md)
+        title = (
+            fm_title
+            or authored_h1
+            or rel.stem.replace("-", " ").replace("_", " ").title()
+        )
+        entries.append((src, rel.with_suffix(".html").as_posix(), title, body_md))
+
+    nav_pages = [(href, title) for _, href, title, _ in entries]
+    out_root = root / args.out
+    if out_root.exists():
+        shutil.rmtree(out_root)
+
+    rendered = {href for _, href, _, _ in entries}
+    assets: set[str] = set()
+    dead: list[tuple[str, str]] = []
+
+    for src, href, title, body_md in entries:
+        depth = href.count("/")
+        root_prefix = "../" * depth
+        body = render_fragment(body_md)
+        body = rewrite_links(
+            body, href, root, rendered, assets, dead, readme_index is not None
+        )
+        body, toc = extract_toc(body)
+        page = PAGE.format(
+            title=html.escape(
+                f"{title} — {site_title}" if title != site_title else title
+            ),
+            site_title=html.escape(site_title),
+            css=CSS,
+            head_extra=head_extra,
+            after_body=after_body,
+            nav=build_nav(nav_pages, href, root_prefix),
+            body=body,
+            toc=toc,
+            root=root_prefix,
+        )
+        dest = out_root / href
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(page, encoding="utf-8")
+        # Emit a clean Markdown twin next to every HTML page. Frontmatter was
+        # stripped above; restore its title as an H1 when the body has none.
+        if not args.no_md_twins:
+            twin = body_md
+            if first_h1(twin) is None:
+                twin = f"# {title}\n\n{twin}"
+            dest.with_suffix(".md").write_text(twin, encoding="utf-8")
+
+    # index.html fallback so the site root is never a 404.
+    if not (out_root / "index.html").exists():
+        first = entries[0][1]
+        (out_root / "index.html").write_text(
+            f'<!doctype html><meta charset="utf-8">'
+            f'<meta http-equiv="refresh" content="0; url={first}">'
+            f'<a href="{first}">{html.escape(site_title)}</a>',
+            encoding="utf-8",
+        )
+
+    # Files linked from a page but not themselves pages: schemas, specs, images.
+    for rel in sorted(assets):
+        dest = out_root / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(root / rel, dest)
+
+    print(f"rendered {len(entries)} page(s): {out_root}")
+    if assets:
+        print(f"copied {len(assets)} linked asset(s)")
+    if dead:
+        # Not an error: excluding a page is a choice, and the link is now plain
+        # text rather than a 404. But it is exactly the drift worth seeing, so
+        # it is reported per render instead of waiting for a reader to find it.
+        print(f"unlinked {len(dead)} link(s) to unrendered targets:", file=sys.stderr)
+        for page, url in sorted(set(dead))[:20]:
+            print(f"  {page} -> {url}", file=sys.stderr)
+        if len(set(dead)) > 20:
+            print(f"  ... and {len(set(dead)) - 20} more", file=sys.stderr)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

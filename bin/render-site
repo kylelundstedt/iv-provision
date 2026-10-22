@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# render-site [repo-checkout] — render a Markdown doc site to <repo>/_site.
+#
+# Apex renders documents; render-md-site supplies navigation, TOCs, link
+# rewriting, and the site shell. Per-repo arguments go in
+# `.render-md-site.args`, one argument per line (blank lines and comments are
+# ignored).
+set -euo pipefail
+
+REPO="${1:-$PWD}"
+REPO="$(cd "$REPO" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+if command -v render-md-site >/dev/null; then
+  RENDER_MD_SITE=$(command -v render-md-site)
+elif [[ -x "$SCRIPT_DIR/render-md-site" ]]; then
+  RENDER_MD_SITE="$SCRIPT_DIR/render-md-site"
+else
+  echo "render-site: render-md-site not found" >&2
+  exit 1
+fi
+
+args=()
+if [[ -f "$REPO/.render-md-site.args" ]]; then
+  while IFS= read -r line; do
+    [[ -z "${line// }" || "$line" == \#* ]] && continue
+    args+=("$line")
+  done < "$REPO/.render-md-site.args"
+fi
+
+"$RENDER_MD_SITE" "$REPO" "${args[@]+"${args[@]}"}"
+
+if command -v gen-llms-txt >/dev/null; then
+  GEN_LLMS=$(command -v gen-llms-txt)
+elif [[ -x "$SCRIPT_DIR/gen-llms-txt" ]]; then
+  GEN_LLMS="$SCRIPT_DIR/gen-llms-txt"
+else
+  GEN_LLMS=""
+fi
+if [[ -n "$GEN_LLMS" ]]; then
+  (cd "$REPO" && SITE_OUTPUT_DIR="$REPO/_site" "$GEN_LLMS")
+fi
+
+echo "rendered (apex): $REPO/_site"

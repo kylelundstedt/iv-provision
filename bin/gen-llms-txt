@@ -1,0 +1,382 @@
+#!/usr/bin/env python3
+"""Normalize Markdown twins and generate llms.txt (+ llms-full.txt).
+
+`render-md-site` copies every source beside its HTML output as a `.md` twin.
+Older Quarto-built sites may instead contain `*-gfm.md` twins, so the
+normalization path remains backward compatible with those artifacts.
+
+Then this tool walks the twins and writes two discovery artifacts an AI agent
+can fetch instead of scraping HTML:
+
+  llms.txt       -- a curated index (llmstxt.org convention): title, blurb, and a
+                    grouped list of every page with a one-line summary + link.
+  llms-full.txt  -- every page concatenated into one document, for agents that
+                    want the whole corpus in a single fetch.
+
+Both land in the output dir alongside the HTML, so they are part of the sealed
+_site release and flow through any render -> gate -> promote pipeline like other
+rendered artifacts.
+
+The output directory defaults to `_site`; `render-site` passes it explicitly.
+Optional environment variables:
+
+  SITE_TITLE   override the index title (otherwise from `.site.yml`, then
+               legacy `_quarto.yml`, else "Documentation")
+  SITE_BLURB   override the one-line blurb under the title (same fallback order)
+  SITE_URL     emit absolute links (e.g. https://iv.exe.xyz); otherwise links
+               are relative to the site root, which an agent resolves against
+               wherever it fetched llms.txt
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import sys
+from pathlib import Path
+
+# Preferred section order; unlisted sections sort alphabetically after these.
+# Empty by default: the image is repo-agnostic and shouldn't impose an order.
+SECTION_ORDER: list[str] = []
+SECTION_TITLES: dict[str, str] = {}
+
+GENERATED = {"llms.txt", "llms-full.txt"}
+
+
+def _strip_quotes(s: str) -> str:
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in ("'", '"'):
+        inner = s[1:-1]
+        if s[0] == '"':
+            inner = inner.replace('\\"', '"').replace("\\n", "\n").replace("\\\\", "\\")
+        return inner
+    return s
+
+
+def read_site_meta() -> tuple[str | None, str | None]:
+    """Read top-level title/description from the lightweight `.site.yml`."""
+    path = Path(".site.yml")
+    if not path.exists():
+        return (None, None)
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return (None, None)
+    values: dict[str, str] = {}
+    for line in text.splitlines():
+        if not line or line[0].isspace() or line.lstrip().startswith("#"):
+            continue
+        key, sep, value = line.partition(":")
+        if sep and key in ("title", "description"):
+            values[key] = _strip_quotes(value.strip())
+    return (values.get("title"), values.get("description"))
+
+
+def read_quarto_meta() -> tuple[str | None, str | None]:
+    """Extract website.title / website.description from _quarto.yml in cwd.
+
+    Mini-parser: supports plain or quoted scalars and `>` / `|` block scalars,
+    which cover the shapes typical Quarto websites use. Returns (None, None) on
+    any problem -- callers fall back to env or generic defaults.
+    """
+    path: Path | None = None
+    for name in ("_quarto.yml", "_quarto.yaml"):
+        p = Path(name)
+        if p.exists():
+            path = p
+            break
+    if path is None:
+        return (None, None)
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return (None, None)
+
+    n = len(lines)
+    i = 0
+    # Skip to a top-level `website:` line.
+    found = False
+    while i < n:
+        s = lines[i].split("#", 1)[0].rstrip()
+        if s == "website:":
+            found = True
+            i += 1
+            break
+        i += 1
+    if not found:
+        return (None, None)
+
+    title: str | None = None
+    description: str | None = None
+    block_indent: int | None = None
+    while i < n:
+        line = lines[i]
+        if not line.strip() or line.lstrip().startswith("#"):
+            i += 1
+            continue
+        indent = len(line) - len(line.lstrip())
+        if indent == 0:
+            break
+        if block_indent is None:
+            block_indent = indent
+        if indent != block_indent:
+            i += 1
+            continue
+        rest = line.lstrip()
+        key, sep, val = rest.partition(":")
+        if not sep:
+            i += 1
+            continue
+        key = key.strip()
+        val = val.strip()
+        if key not in ("title", "description"):
+            i += 1
+            continue
+        if val and not val.startswith((">", "|")):
+            current = _strip_quotes(val)
+            i += 1
+        else:
+            fold = val == "" or val.startswith(">")
+            i += 1
+            chunks: list[str] = []
+            while i < n:
+                cont = lines[i]
+                if not cont.strip():
+                    chunks.append("")
+                    i += 1
+                    continue
+                cindent = len(cont) - len(cont.lstrip())
+                if cindent <= block_indent:
+                    break
+                chunks.append(cont[block_indent:].rstrip())
+                i += 1
+            sep_str = " " if fold else "\n"
+            current = sep_str.join(c for c in chunks if c).strip()
+        if key == "title" and title is None:
+            title = current
+        elif key == "description" and description is None:
+            description = current
+    return (title, description)
+
+
+def resolve_title_blurb() -> tuple[str, str]:
+    """Resolve (title, blurb) for the index header.
+
+    Order: env (SITE_TITLE / SITE_BLURB) -> .site.yml -> legacy _quarto.yml ->
+    generic fallback ("Documentation" / "").
+    """
+    env_title = os.environ.get("SITE_TITLE")
+    env_blurb = os.environ.get("SITE_BLURB")
+    yaml_title, yaml_blurb = (None, None)
+    if env_title is None or env_blurb is None:
+        yaml_title, yaml_blurb = read_site_meta()
+        if yaml_title is None or yaml_blurb is None:
+            legacy_title, legacy_blurb = read_quarto_meta()
+            yaml_title = yaml_title or legacy_title
+            yaml_blurb = yaml_blurb or legacy_blurb
+    title = env_title or yaml_title or "Documentation"
+    blurb = env_blurb or yaml_blurb or ""
+    return (title, blurb)
+
+
+def strip_frontmatter(text: str) -> str:
+    """Remove leading YAML frontmatter from generated Markdown twins."""
+    if not text.startswith("---\n"):
+        return text
+    end = text.find("\n---\n", 4)
+    if end == -1:
+        return text
+    return text[end + 5 :].lstrip("\n")
+
+
+def strip_title_block(text: str) -> str:
+    """Drop only title metadata shapes known to be generated by Quarto.
+
+    A repeated H1 is collapsed only when the intervening block contains blank
+    lines and optional ISO dates. Arbitrary prose is never treated as generated
+    metadata: preserving authored content is more important than removing every
+    possible duplicate title shape.
+    """
+    lines = text.splitlines(keepends=True)
+    if not lines:
+        return text
+
+    first = re.fullmatch(r"# (.+?)\r?\n?", lines[0])
+    if not first:
+        return text
+
+    title = first.group(1)
+    repeated: int | None = None
+    for i, line in enumerate(lines[1:], start=1):
+        if re.fullmatch(rf"# {re.escape(title)}\r?\n?", line):
+            repeated = i
+            break
+        stripped = line.strip()
+        if stripped and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", stripped):
+            break
+
+    if repeated is not None:
+        return lines[0] + "".join(lines[repeated + 1 :])
+
+    # Frontmatter-only titles may produce a leading H1 followed by a bare date.
+    # Remove that date while preserving the original newline convention.
+    if (
+        len(lines) >= 3
+        and not lines[1].strip()
+        and re.fullmatch(r"\d{4}-\d{2}-\d{2}\r?\n?", lines[2])
+    ):
+        return lines[0] + "".join(lines[3:])
+    return text
+
+
+def rewrite_gfm_href(html: str, old_name: str, new_name: str) -> str:
+    """Repoint only an HTML href to a renamed GFM twin."""
+    pattern = re.compile(rf"(\bhref\s*=\s*['\"]){re.escape(old_name)}(['\"])")
+    return pattern.sub(rf"\g<1>{new_name}\g<2>", html)
+
+
+def normalize_twins(out_dir: Path) -> None:
+    """Rename `*-gfm.md` -> `*.md`, strip generated title blocks, and repoint the
+    sibling HTML's "Other Formats -> GitHub (GFM)" link at the renamed twin.
+
+    Quarto writes that link with the original output name (`foo-gfm.md`); the
+    rename would otherwise leave it dangling (the symptom: clicking GitHub (GFM)
+    404s). We rewrite the basename in `foo.html` to match.
+    """
+    for md in sorted(out_dir.rglob("*.md")):
+        if md.name.endswith("-gfm.md"):
+            target = md.with_name(md.name[: -len("-gfm.md")] + ".md")
+        else:
+            target = md
+        if target != md and target.exists():
+            print(
+                f"gen-llms-txt: skip rename, {target} already exists", file=sys.stderr
+            )
+            target = md
+        cleaned = strip_frontmatter(
+            strip_title_block(md.read_text(encoding="utf-8", errors="replace"))
+        )
+        if target != md:
+            html = md.with_name(md.name[: -len("-gfm.md")] + ".html")
+            if html.exists():
+                txt = html.read_text(encoding="utf-8", errors="replace")
+                patched = rewrite_gfm_href(txt, md.name, target.name)
+                if patched != txt:
+                    html.write_text(patched, encoding="utf-8")
+        target.write_text(cleaned, encoding="utf-8")
+        if target != md:
+            md.unlink()
+
+
+def first_heading(text: str) -> str | None:
+    for line in text.splitlines():
+        m = re.match(r"^#\s+(.+?)\s*$", line)
+        if m:
+            return m.group(1).strip()
+    return None
+
+
+def first_paragraph(text: str) -> str | None:
+    """First prose paragraph: skip headings, blockquotes, code fences, lists."""
+    in_fence = False
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence or not line:
+            continue
+        if line.startswith(("#", ">", "-", "*", "|", ":::")) or re.match(
+            r"\d+[.)]\s", line
+        ):
+            continue
+        summary = re.sub(r"\s+", " ", line)
+        summary = re.sub(r"\*\*|\*|`", "", summary)
+        return summary[:200].rstrip()
+    return None
+
+
+def title_for(path: Path, text: str) -> str:
+    return first_heading(text) or path.stem.replace("_", " ").replace("-", " ").title()
+
+
+def main() -> int:
+    out_dir = Path(
+        os.environ.get("SITE_OUTPUT_DIR")
+        or os.environ.get("QUARTO_PROJECT_OUTPUT_DIR", "_site")
+    )
+    if not out_dir.is_dir():
+        print(f"gen-llms-txt: output dir not found: {out_dir}", file=sys.stderr)
+        return 1
+
+    normalize_twins(out_dir)
+
+    site_title, site_blurb = resolve_title_blurb()
+    site_url = os.environ.get("SITE_URL", "").rstrip("/")
+
+    def link(rel: str) -> str:
+        return f"{site_url}/{rel}" if site_url else rel
+
+    pages: list[tuple[str, Path, str, str | None]] = []
+    for md in sorted(out_dir.rglob("*.md")):
+        rel = md.relative_to(out_dir).as_posix()
+        if rel in GENERATED:
+            continue
+        text = md.read_text(encoding="utf-8", errors="replace")
+        pages.append((rel, md, title_for(md, text), first_paragraph(text)))
+
+    if not pages:
+        print(
+            "gen-llms-txt: no Markdown twins found; render the site with "
+            "render-md-site first",
+            file=sys.stderr,
+        )
+        return 1
+
+    sections: dict[str, list[tuple[str, str, str | None]]] = {}
+    for rel, _path, title, summary in pages:
+        parts = rel.split("/")
+        section = "" if len(parts) == 1 else parts[0]
+        sections.setdefault(section, []).append((rel, title, summary))
+
+    ordered = [""] + SECTION_ORDER
+    extra = sorted(s for s in sections if s and s not in SECTION_ORDER)
+    ordered += extra
+
+    lines = [f"# {site_title}", ""]
+    if site_blurb:
+        lines += [f"> {site_blurb}", ""]
+    for section in ordered:
+        if section not in sections:
+            continue
+        if section:
+            lines.append(f"## {SECTION_TITLES.get(section, section.title())}")
+            lines.append("")
+        for rel, title, summary in sorted(sections[section]):
+            suffix = f": {summary}" if summary else ""
+            lines.append(f"- [{title}]({link(rel)}){suffix}")
+        lines.append("")
+    (out_dir / "llms.txt").write_text(
+        "\n".join(lines).rstrip() + "\n", encoding="utf-8"
+    )
+
+    full = [f"# {site_title} — full documentation", ""]
+    if site_blurb:
+        full += [f"> {site_blurb}", ""]
+    for rel, path, _title, _summary in pages:
+        full.append("\n---\n")
+        full.append(f"<!-- source: {rel} -->")
+        full.append("")
+        full.append(path.read_text(encoding="utf-8", errors="replace").rstrip())
+        full.append("")
+    (out_dir / "llms-full.txt").write_text(
+        "\n".join(full).rstrip() + "\n", encoding="utf-8"
+    )
+
+    print(
+        f"gen-llms-txt: wrote llms.txt + llms-full.txt ({len(pages)} pages) to {out_dir}"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

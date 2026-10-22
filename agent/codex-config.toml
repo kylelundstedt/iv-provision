@@ -1,0 +1,19 @@
+# Codex default model + provider for iv-provision VMs.
+#
+# All Codex traffic goes through the Aperture gateway on the tailnet
+# (iv-infra development-platform.md, "Gateway plane: cloud models"). Aperture is a
+# passthrough here: Codex keeps the user's own ChatGPT login (one-time
+# `codex login --device-auth` per VM) and Aperture authorizes the request by
+# the VM's Tailscale identity, then forwards it to the ChatGPT Codex backend.
+# No API key is configured.
+#
+# Requires: the VM on the tailnet as tag:dev, a tailnet grant from tag:dev to
+# the Aperture node, and an Aperture grant (role user) for tag:dev.
+model = "gpt-6.1-sol"
+model_provider = "aperture"
+
+[model_providers.aperture]
+name = "Aperture"
+base_url = "http://ai.dojo-sun.ts.net/codex"
+wire_api = "responses"
+requires_openai_auth = true

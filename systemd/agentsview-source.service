@@ -1,0 +1,20 @@
+[Unit]
+Description=AgentsView source daemon (loopback, behind the exe.dev auth proxy)
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=%h/.config/agentsview/source.env
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/agentsview/source.env
+Environment=AGENTSVIEW_DATA_DIR=%h/.agentsview
+ExecStart=/usr/local/bin/agentsview-source-daemon
+Restart=on-failure
+RestartSec=10
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

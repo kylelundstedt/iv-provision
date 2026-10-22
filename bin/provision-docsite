@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# provision-docsite <repo-checkout> — render a doc-site repo and serve its _site
+# on the VM's :8000 exe.dev proxy endpoint with nginx (gzip + cache headers).
+#
+# One repo per VM. Idempotent: re-run to re-render + re-publish. To refresh the
+# live site after edits, re-run `provision-docsite <repo>` (NOT bare
+# `render-site`): nginx serves a published release under <repo>/.docsite, not the
+# build tree, so a re-render that fails or is mid-flight cannot break the live
+# site. No restart or reload is needed for the content swap -- nginx resolves the
+# `current` symlink per request.
+#
+# Uses nginx from the exeuntu base image. Generated assets receive long-lived
+# cache headers; text responses are compressed. Node-free.
+#
+# This is the ungoverned-simple publish; the governed render->gate->promote
+# loop is iv/infra/render-promote.md.
+set -euo pipefail
+
+REPO="${1:?usage: provision-docsite <repo-checkout>}"
+REPO="$(cd "$REPO" && pwd)"
+
+# Serve from a released copy, not the build tree. render-site (via render-md-site)
+# does `shutil.rmtree(_site)` and then rebuilds page by page, so pointing nginx
+# straight at $REPO/_site means every re-render deletes the live docroot and
+# serves 404s during the rebuild -- and leaves the site broken if a render fails
+# halfway. Instead: render to the build tree, and only on a *successful* render
+# publish it to a timestamped release and atomically flip a `current` symlink the
+# docroot follows. A failed or in-flight render never touches what is being
+# served; nginx picks up the flip with no reload (it resolves the symlink per
+# request).
+BUILD="$REPO/_site"
+SERVE="$REPO/.docsite"
+DOCROOT="$SERVE/current"      # nginx root; a symlink -> releases/<ts>
+
+render-site "$REPO"
+
+# Refuse to publish an empty/failed render: keep the previous release live.
+if [[ ! -s "$BUILD/index.html" ]]; then
+  echo "provision-docsite: render produced no $BUILD/index.html; keeping current release" >&2
+  [[ -e "$DOCROOT" ]] || { echo "provision-docsite: and there is no current release to fall back to" >&2; exit 1; }
+else
+  rel="$SERVE/releases/$(date -u +%Y%m%dT%H%M%SZ)"
+  mkdir -p "$rel"
+  cp -a "$BUILD/." "$rel/"
+  # Atomic swap: create the new symlink beside the old and rename over it.
+  ln -sfn "$rel" "$SERVE/current.tmp"
+  mv -Tf "$SERVE/current.tmp" "$DOCROOT"
+  # Keep the last 3 releases for quick rollback; prune older ones. Never prune
+  # the release `current` resolves to, whatever the mtime sort does -- deleting
+  # the served tree out from under nginx is exactly the failure this rewrite
+  # exists to prevent.
+  live="$(readlink -f "$DOCROOT")"
+  ls -1dt "$SERVE/releases/"*/ 2>/dev/null | tail -n +4 | while read -r old; do
+    [[ "$(readlink -f "$old")" == "$live" ]] && continue
+    rm -rf "$old"
+  done
+fi
+
+# Retire any prior python-based docsite user service (would fight nginx for :8000).
+export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+systemctl --user disable --now docsite.service >/dev/null 2>&1 || true
+
+# nginx workers must read _site under the invoking user's home (mode 750), so run
+# them as that user rather than www-data.
+sudo sed -i "s/^user .*/user ${USER};/" /etc/nginx/nginx.conf
+
+sudo tee /etc/nginx/sites-available/docsite >/dev/null <<NGINX
+server {
+    listen 8000 default_server;
+    listen [::]:8000 default_server;
+    server_name _;
+
+    root ${DOCROOT};
+    index index.html;
+
+    gzip on;
+    gzip_comp_level 6;
+    gzip_min_length 256;
+    gzip_vary on;
+    gzip_proxied any;
+    gzip_types text/plain text/css application/javascript text/javascript
+               application/json image/svg+xml application/xml text/xml
+               application/rss+xml application/atom+xml font/ttf;
+
+    # Generated/static assets are immutable within a rendered release.
+    location /site_libs/ { expires 1y;  add_header Cache-Control "public, immutable"; }
+    location /assets/    { expires 30d; add_header Cache-Control "public"; }
+
+    # Resolve direct files and directory indexes for clean URLs.
+    location / {
+        try_files \$uri \$uri/ \$uri/index.html =404;
+    }
+}
+NGINX
+
+sudo rm -f /etc/nginx/sites-enabled/default
+sudo ln -sf /etc/nginx/sites-available/docsite /etc/nginx/sites-enabled/docsite
+sudo nginx -t
+sudo systemctl enable --now nginx
+sudo systemctl reload nginx
+echo "docsite live on :8000 (nginx, gzip) -> ${DOCROOT}"

@@ -1,0 +1,145 @@
+#!/usr/bin/env bash
+# install-cloud-cli <aws|rclone|azure|gcloud>... — heavy cloud CLIs, on demand.
+#
+# Azure CLI and the Google Cloud SDK are NOT installed by the default IV
+# provisioner: together they add ~2 GB of Python-bundled dependencies, which
+# would slow every fresh-VM provision. Most VMs never touch Azure or GCP, so
+# they install per-VM, on demand, here.
+#
+# aws joined them 2026-07-28. It had been a default install, which was an
+# inconsistency rather than a decision: measured across the fleet it cost
+# 267-533 MB per VM (~2.9 GB in total) while NOT ONE VM had `~/.aws/config` or
+# `~/.aws/credentials` — it was installed everywhere and configured nowhere.
+# The S3 work on these boxes goes to Tigris over S3-compatible endpoints via
+# the `tigris` CLI, boto3, and duckdb's httpfs, none of which need this CLI.
+# tigris remains a default install: 18 vendored agent skills depend on it.
+#
+# The 533-vs-267 MB split was a second bug: `aws/install --update` leaves the
+# superseded version behind under /usr/local/aws-cli/v2/, so VMs provisioned
+# more than once carried two copies. `remove_aws` below clears the whole tree.
+#
+# Idempotent: re-running a target that's already present is a no-op.
+# Arch-aware (x86_64 + aarch64). Installs system-wide via sudo (NOPASSWD on VMs).
+set -euo pipefail
+
+[ $# -gt 0 ] || { echo "usage: install-cloud-cli <aws|rclone|azure|gcloud> [...]" >&2; exit 1; }
+
+AZURE_CLI_VERSION=${AZURE_CLI_VERSION:-2.88.0-1~noble}
+GCLOUD_VERSION=${GCLOUD_VERSION:-575.0.1}
+# Pins moved here from provision-iv.sh when these became on-demand.
+RCLONE_VERSION=${RCLONE_VERSION:-1.74.3}
+RCLONE_SHA256_AMD64=dbee7ccd7a5d617e4ed4cd4555c16669b511abfe8d31164f61be35ac9e999bd2
+RCLONE_SHA256_ARM64=8f8d47446e061f80c3256659fe8e21f56d72d96aaefe1275d088ea5eb6b42aa7
+AWS_CLI_VERSION=${AWS_CLI_VERSION:-2.35.7}
+AWS_CLI_SHA256_X86_64=300cd0b8a8dd64f080202e02ef1745bf327b8a2546054a2d036869c0f27f4199
+AWS_CLI_SHA256_AARCH64=2d4f222c1e16212c0a6bfea23af2e2e8c13a053600d12f68846d794e8470dd9f
+
+install_aws() {
+	if command -v aws >/dev/null 2>&1; then
+		echo "aws already installed: $(aws --version 2>&1)"
+		return
+	fi
+	local arch sha tmp
+	arch=$(uname -m)
+	case "$arch" in
+		x86_64) sha=$AWS_CLI_SHA256_X86_64 ;;
+		aarch64) sha=$AWS_CLI_SHA256_AARCH64 ;;
+		*) echo "install-cloud-cli: unsupported arch $arch" >&2; return 1 ;;
+	esac
+	tmp=$(mktemp -d)
+	trap 'rm -rf "$tmp"' RETURN
+	curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-${arch}-${AWS_CLI_VERSION}.zip" \
+		-o "$tmp/aws.zip"
+	# Verified, matching provision-iv.sh's standard for every pinned binary.
+	echo "$sha  $tmp/aws.zip" | sha256sum -c - >/dev/null
+	unzip -q "$tmp/aws.zip" -d "$tmp"
+	if [ -d /usr/local/aws-cli ]; then
+		sudo "$tmp/aws/install" --bin-dir /usr/local/bin --install-dir /usr/local/aws-cli --update
+	else
+		sudo "$tmp/aws/install" --bin-dir /usr/local/bin --install-dir /usr/local/aws-cli
+	fi
+	aws --version
+}
+
+remove_aws() {
+	sudo rm -rf /usr/local/aws-cli /usr/local/bin/aws /usr/local/bin/aws_completer
+	echo "aws removed (reinstall: install-cloud-cli aws)"
+}
+
+# rclone joined the on-demand set 2026-07-29: 75 MB per VM, and the only thing
+# on this fleet that uses it is the Tigris backup, which runs on klundstedt-mini
+# (backup/tigris-backup.sh, backup/agentsview-snapshot.sh — all job_require_mini).
+# No dev VM had ~/.config/rclone/rclone.conf. The `tigris` CLI stays a default
+# install: 18 vendored agent skills depend on it.
+install_rclone() {
+	if command -v rclone >/dev/null 2>&1; then
+		echo "rclone already installed: $(rclone version | head -1)"
+		return
+	fi
+	local arch sha tmp
+	arch=$(dpkg --print-architecture)
+	case "$arch" in
+		amd64) sha=$RCLONE_SHA256_AMD64 ;;
+		arm64) sha=$RCLONE_SHA256_ARM64 ;;
+		*) echo "install-cloud-cli: unsupported arch $arch" >&2; return 1 ;;
+	esac
+	tmp=$(mktemp -d)
+	trap 'rm -rf "$tmp"' RETURN
+	curl -fsSL "https://downloads.rclone.org/v${RCLONE_VERSION}/rclone-v${RCLONE_VERSION}-linux-${arch}.zip" -o "$tmp/rclone.zip"
+	echo "$sha  $tmp/rclone.zip" | sha256sum -c - >/dev/null
+	unzip -q "$tmp/rclone.zip" -d "$tmp"
+	sudo install -m 0755 "$tmp/rclone-v${RCLONE_VERSION}-linux-${arch}/rclone" /usr/local/bin/rclone
+	rclone version | head -1
+}
+
+install_azure() {
+	if command -v az >/dev/null 2>&1; then
+		echo "azure-cli already installed: $(az version --query '\"azure-cli\"' -o tsv 2>/dev/null || echo present)"
+		return
+	fi
+	# Microsoft's signed apt repository, with a pinned package version.
+	local keyring=/usr/share/keyrings/microsoft-azure-cli.gpg
+	local arch
+	arch=$(dpkg --print-architecture)
+	sudo rm -f "$keyring"
+	curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
+		| gpg --dearmor \
+		| sudo tee "$keyring" >/dev/null
+	echo "deb [arch=${arch} signed-by=${keyring}] https://packages.microsoft.com/repos/azure-cli/ noble main" \
+		| sudo tee /etc/apt/sources.list.d/azure-cli.list >/dev/null
+	sudo apt-get update
+	sudo apt-get install -y --no-install-recommends "azure-cli=${AZURE_CLI_VERSION}"
+	sudo rm -rf /var/lib/apt/lists/*
+	az version
+}
+
+install_gcloud() {
+	if command -v gcloud >/dev/null 2>&1; then
+		echo "gcloud already installed: $(gcloud --version | head -1)"
+		return
+	fi
+	# Version-pinned, self-contained SDK tarball into /opt. uname -m emits
+	# x86_64/aarch64; gcloud's 64-bit ARM asset is named "arm".
+	local arch
+	arch=$(uname -m | sed 's/aarch64/arm/')
+	curl -fsSL "https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-${GCLOUD_VERSION}-linux-${arch}.tar.gz" -o /tmp/gcloud.tar.gz
+	sudo rm -rf /opt/google-cloud-sdk
+	sudo tar -xzf /tmp/gcloud.tar.gz -C /opt
+	rm /tmp/gcloud.tar.gz
+	sudo /opt/google-cloud-sdk/install.sh --quiet --path-update false --usage-reporting false
+	sudo ln -sf /opt/google-cloud-sdk/bin/gcloud /usr/local/bin/gcloud
+	sudo ln -sf /opt/google-cloud-sdk/bin/gsutil /usr/local/bin/gsutil
+	sudo ln -sf /opt/google-cloud-sdk/bin/bq /usr/local/bin/bq
+	gcloud --version
+}
+
+for target in "$@"; do
+	case "$target" in
+		aws) install_aws ;;
+		rclone) install_rclone ;;
+		remove-aws) remove_aws ;;
+		azure | az) install_azure ;;
+		gcloud | gcp | google) install_gcloud ;;
+		*) echo "unknown target: $target (expected: aws, rclone, remove-aws, azure, gcloud)" >&2; exit 1 ;;
+	esac
+done

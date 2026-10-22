@@ -1,0 +1,830 @@
+#!/usr/bin/env python3
+"""Entire external-agent adapter backed by AgentsView's normalized archive.
+
+The adapter is deliberately attach-only. It exports a normalized AgentsView
+session as Entire-compatible JSONL without modifying AgentsView or any native
+agent store. Claude/Codex should normally use Entire's native integrations;
+Shelley normally uses the direct `entire-agent-shelley` plugin. This adapter is
+a reviewed bridge for historical attachment, unsupported-agent import, and
+native-versus-normalized reconciliation. It is not independent capture
+redundancy when both readers depend on the same native session store.
+"""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import hashlib
+import json
+import os
+import re
+import sqlite3
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+from typing import Any, NoReturn
+
+PROTOCOL_VERSION = 1
+SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+ADAPTER_NAME = os.environ.get("ENTIRE_AGENTSVIEW_ADAPTER_NAME", "agentsview")
+ADAPTER_TYPE = os.environ.get("ENTIRE_AGENTSVIEW_ADAPTER_TYPE", "AgentsView")
+AGENT_FILTER = os.environ.get("ENTIRE_AGENTSVIEW_AGENT_FILTER", "").strip().lower()
+OMITTED_RESULT = "[tool result omitted by AgentsView adapter data-minimization policy]"
+
+
+def fail(message: str) -> NoReturn:
+    print(message, file=sys.stderr)
+    raise SystemExit(1)
+
+
+def emit(value: Any) -> None:
+    json.dump(value, sys.stdout, separators=(",", ":"))
+    sys.stdout.write("\n")
+
+
+def database_path() -> Path:
+    override = os.environ.get("AGENTSVIEW_DB")
+    if override:
+        return Path(override).expanduser().resolve()
+    data_dir = Path(os.environ.get("AGENTSVIEW_DATA_DIR", "~/.agentsview")).expanduser()
+    return (data_dir / "sessions.db").resolve()
+
+
+def cache_root() -> Path:
+    override = os.environ.get("ENTIRE_AGENTSVIEW_CACHE")
+    if override:
+        return Path(override).expanduser().resolve()
+    xdg = os.environ.get("XDG_CACHE_HOME")
+    base = Path(xdg).expanduser() if xdg else Path("~/.cache").expanduser()
+    return (base / "entire-agent-agentsview").resolve()
+
+
+def connect() -> sqlite3.Connection:
+    path = database_path()
+    if not path.is_file():
+        fail(f"AgentsView database not found: {path}")
+    try:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    except sqlite3.Error as exc:
+        fail(f"opening AgentsView database: {exc}")
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})")}
+
+
+def schema_present() -> bool:
+    path = database_path()
+    if not path.is_file():
+        return False
+    try:
+        with connect() as conn:
+            sessions = table_columns(conn, "sessions")
+            messages = table_columns(conn, "messages")
+            tools = table_columns(conn, "tool_calls")
+        return {
+            "id",
+            "agent",
+            "machine",
+            "project",
+            "cwd",
+            "source_session_id",
+            "parent_session_id",
+            "started_at",
+            "ended_at",
+            "secret_leak_count",
+            "secrets_rules_version",
+            "parser_malformed_lines",
+            "is_truncated",
+        }.issubset(sessions) and {
+            "id",
+            "session_id",
+            "ordinal",
+            "role",
+            "content",
+            "timestamp",
+            "model",
+            "is_system",
+        }.issubset(messages) and {
+            "message_id",
+            "session_id",
+            "tool_name",
+            "tool_use_id",
+            "input_json",
+            "result_content",
+            "file_path",
+        }.issubset(tools)
+    except (sqlite3.Error, SystemExit):
+        return False
+
+
+def require_schema(conn: sqlite3.Connection) -> None:
+    if not schema_present():
+        fail(
+            "AgentsView schema is incompatible; require normalized sessions, "
+            "messages, and tool_calls tables"
+        )
+
+
+def validate_safe_id(session_id: str) -> str:
+    if not SAFE_ID_RE.fullmatch(session_id):
+        fail(f"invalid Entire-safe session ID: {session_id!r}")
+    return session_id
+
+
+def probe_repo(path: str | Path) -> Path | None:
+    resolved = Path(path).expanduser().resolve()
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(resolved), "rev-parse", "--show-toplevel"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return Path(result.stdout.strip()).resolve()
+
+
+def canonical_repo(path: str | Path) -> Path:
+    repo = probe_repo(path)
+    if repo is None:
+        fail(f"not inside a Git worktree: {Path(path).expanduser().resolve()}")
+    return repo
+
+
+def current_repo() -> Path | None:
+    raw = os.environ.get("ENTIRE_REPO_ROOT")
+    return canonical_repo(raw) if raw else None
+
+
+def checkpointed_session(repo: Path, identifiers: set[str]) -> str | None:
+    if os.environ.get("ENTIRE_AGENTSVIEW_ALLOW_DUPLICATE") == "1":
+        return None
+    ref = "entire/checkpoints/v1"
+    exists = subprocess.run(
+        ["git", "-C", str(repo), "show-ref", "--verify", "--quiet", f"refs/heads/{ref}"],
+        check=False,
+    )
+    if exists.returncode != 0:
+        return None
+    for identifier in sorted(value for value in identifiers if value):
+        result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repo),
+                "grep",
+                "-l",
+                "-F",
+                f'"session_id": "{identifier}"',
+                ref,
+                "--",
+                ":(glob)**/metadata.json",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return identifier
+    return None
+
+
+def ensure_secure_dir(path: Path) -> Path:
+    root = cache_root()
+    resolved = path.expanduser().resolve()
+    try:
+        resolved.relative_to(root)
+    except ValueError:
+        fail(f"AgentsView adapter cache path is outside its root: {resolved}")
+    for target in (root, resolved):
+        target.mkdir(parents=True, exist_ok=True, mode=0o700)
+        stat = target.stat()
+        if stat.st_uid != os.getuid():
+            fail(f"AgentsView adapter cache is not owned by current user: {target}")
+        target.chmod(0o700)
+    return resolved
+
+
+def repo_cache_dir(repo: Path) -> Path:
+    digest = hashlib.sha256(str(repo).encode()).hexdigest()[:16]
+    return cache_root() / digest
+
+
+def unique_attach_id(agentsview_id: str) -> str:
+    digest = hashlib.sha256(agentsview_id.encode()).hexdigest()[:24]
+    return f"av-{digest}"
+
+
+def native_attach_id(row: sqlite3.Row) -> str | None:
+    source = str(row["source_session_id"] or "")
+    if SAFE_ID_RE.fullmatch(source):
+        return source
+    agentsview_id = str(row["id"])
+    suffix = agentsview_id.rsplit(":", 1)[-1]
+    if SAFE_ID_RE.fullmatch(suffix):
+        return suffix
+    return None
+
+
+def session_query() -> str:
+    return (
+        "SELECT id,agent,machine,project,cwd,source_session_id,parent_session_id,"
+        "started_at,ended_at,first_message,display_name,session_name,"
+        "transcript_revision,transcript_fidelity,message_count,deleted_at,"
+        "secret_leak_count,secrets_rules_version,parser_malformed_lines,is_truncated "
+        "FROM sessions WHERE deleted_at IS NULL"
+    )
+
+
+def row_matches_identifier(row: sqlite3.Row, identifier: str) -> bool:
+    return identifier in {
+        str(row["id"]),
+        unique_attach_id(str(row["id"])),
+        native_attach_id(row) or "",
+    }
+
+
+def ensure_session_scope(row: sqlite3.Row, expected_repo: Path | None) -> Path:
+    if AGENT_FILTER and str(row["agent"]).lower() != AGENT_FILTER:
+        fail(
+            f"AgentsView session agent is {row['agent']!r}, expected {AGENT_FILTER!r}"
+        )
+    if row["parent_session_id"] and os.environ.get("ENTIRE_AGENTSVIEW_ALLOW_CHILD") != "1":
+        fail(
+            f"AgentsView session {row['id']} is a child session; set "
+            "ENTIRE_AGENTSVIEW_ALLOW_CHILD=1 to attach explicitly"
+        )
+    if int(row["secret_leak_count"] or 0) > 0 and os.environ.get("ENTIRE_AGENTSVIEW_ALLOW_SECRET_FINDINGS") != "1":
+        fail(
+            f"AgentsView session {row['id']} has {row['secret_leak_count']} "
+            "persisted secret finding(s); set ENTIRE_AGENTSVIEW_ALLOW_SECRET_FINDINGS=1 "
+            "only after review"
+        )
+    if (
+        int(row["parser_malformed_lines"] or 0) > 0
+        or int(row["is_truncated"] or 0) > 0
+    ) and os.environ.get("ENTIRE_AGENTSVIEW_ALLOW_PARTIAL") != "1":
+        fail(
+            f"AgentsView session {row['id']} is partial "
+            f"(malformed_lines={row['parser_malformed_lines']}, truncated={row['is_truncated']}); "
+            "set ENTIRE_AGENTSVIEW_ALLOW_PARTIAL=1 only after review"
+        )
+    cwd = str(row["cwd"] or "")
+    if not cwd:
+        fail(f"AgentsView session {row['id']} has no cwd")
+    repo = canonical_repo(cwd)
+    if expected_repo is not None and repo != expected_repo:
+        fail(f"session belongs to {repo}, not current repository {expected_repo}")
+    return repo
+
+
+def find_session(
+    conn: sqlite3.Connection, identifier: str, expected_repo: Path | None
+) -> sqlite3.Row:
+    validate_safe_id(identifier)
+    require_schema(conn)
+    candidates = []
+    for row in conn.execute(session_query()):
+        if not row_matches_identifier(row, identifier):
+            continue
+        if AGENT_FILTER and str(row["agent"]).lower() != AGENT_FILTER:
+            continue
+        if row["parent_session_id"] and os.environ.get("ENTIRE_AGENTSVIEW_ALLOW_CHILD") != "1":
+            continue
+        if expected_repo is not None:
+            repo = probe_repo(str(row["cwd"] or ""))
+            if repo != expected_repo:
+                continue
+        candidates.append(row)
+    if not candidates:
+        fail(f"AgentsView session not found for attach ID: {identifier}")
+    if len(candidates) > 1:
+        aliases = ", ".join(unique_attach_id(str(row["id"])) for row in candidates)
+        fail(f"ambiguous AgentsView session ID {identifier!r}; use one of: {aliases}")
+    ensure_session_scope(candidates[0], expected_repo)
+    return candidates[0]
+
+
+def exact_session(
+    conn: sqlite3.Connection, agentsview_id: str, expected_repo: Path
+) -> sqlite3.Row:
+    require_schema(conn)
+    row = conn.execute(session_query() + " AND id = ?", (agentsview_id,)).fetchone()
+    if row is None:
+        fail(f"AgentsView source session not found: {agentsview_id}")
+    ensure_session_scope(row, expected_repo)
+    return row
+
+
+def parse_input(raw: str | None) -> Any:
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return {"raw": raw}
+
+
+def normalize_repo_path(raw: str, repo: Path) -> str | None:
+    candidate = Path(raw).expanduser()
+    if not candidate.is_absolute():
+        candidate = repo / candidate
+    try:
+        return candidate.resolve().relative_to(repo).as_posix()
+    except (OSError, ValueError):
+        return None
+
+
+def sanitize_tool_input(value: Any, repo: Path) -> Any:
+    if isinstance(value, list):
+        return [sanitize_tool_input(item, repo) for item in value]
+    if not isinstance(value, dict):
+        return value
+    sanitized = {}
+    for key, item in value.items():
+        if key in {"path", "file_path", "notebook_path"} and isinstance(item, str):
+            normalized = normalize_repo_path(item, repo)
+            sanitized[key] = normalized or "[outside-repository path omitted]"
+        else:
+            sanitized[key] = sanitize_tool_input(item, repo)
+    return sanitized
+
+
+def tool_rows(conn: sqlite3.Connection, session_id: str) -> dict[int, list[dict[str, Any]]]:
+    grouped: dict[int, list[dict[str, Any]]] = {}
+    by_identity: dict[str, dict[str, Any]] = {}
+    rows = conn.execute(
+        "SELECT tc.id,tc.message_id,tc.tool_name,tc.category,tc.tool_use_id,"
+        "tc.input_json,tc.skill_name,tc.result_content_length,tc.result_content,"
+        "tc.subagent_session_id,tc.file_path,tc.call_index "
+        "FROM tool_calls tc WHERE tc.session_id = ? "
+        "ORDER BY tc.message_id,tc.call_index,tc.id",
+        (session_id,),
+    )
+    for row in rows:
+        item = dict(row)
+        identity = str(item["tool_use_id"] or f"row-{item['id']}")
+        existing = by_identity.get(identity)
+        if existing is None:
+            by_identity[identity] = item
+            continue
+        if existing.get("result_content") is None and item.get("result_content") is not None:
+            existing["result_content"] = item["result_content"]
+            existing["result_content_length"] = item["result_content_length"]
+        if not existing.get("file_path") and item.get("file_path"):
+            existing["file_path"] = item["file_path"]
+    for item in by_identity.values():
+        grouped.setdefault(int(item["message_id"]), []).append(item)
+    for items in grouped.values():
+        items.sort(key=lambda item: (int(item.get("call_index") or 0), int(item["id"])))
+    return grouped
+
+
+def transcript_metadata(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "adapter": "agentsview",
+        "agentsview_session_id": row["id"],
+        "source_agent": row["agent"],
+        "source_session_id": row["source_session_id"] or row["id"],
+        "origin_machine": row["machine"],
+        "project": row["project"],
+        "transcript_revision": row["transcript_revision"],
+        "transcript_fidelity": row["transcript_fidelity"],
+        "secret_leak_count": row["secret_leak_count"],
+        "secrets_rules_version": row["secrets_rules_version"],
+        "parser_malformed_lines": row["parser_malformed_lines"],
+        "is_truncated": row["is_truncated"],
+    }
+
+
+def project_transcript(
+    conn: sqlite3.Connection,
+    session: sqlite3.Row,
+    repo: Path,
+    include_results: bool,
+) -> tuple[bytes, list[str], str]:
+    session_id = str(session["id"])
+    tools = tool_rows(conn, session_id)
+    meta = transcript_metadata(session)
+    output: list[bytes] = []
+    touched: set[str] = set()
+    first_model = ""
+
+    messages = conn.execute(
+        "SELECT id,ordinal,role,content,timestamp,model,is_system,source_type,"
+        "source_subtype,source_uuid FROM messages WHERE session_id = ? "
+        "ORDER BY ordinal,id",
+        (session_id,),
+    )
+    for message in messages:
+        if int(message["is_system"] or 0):
+            continue
+        role = str(message["role"] or "").lower()
+        if role not in {"user", "assistant"}:
+            fail(f"unsupported AgentsView message role {role!r} in {session_id}")
+        blocks: list[dict[str, Any]] = []
+        content = str(message["content"] or "")
+        if content:
+            blocks.append({"type": "text", "text": content})
+        message_tools = tools.get(int(message["id"]), [])
+        if role == "assistant":
+            for tool in message_tools:
+                tool_id = str(tool["tool_use_id"] or f"avtool-{tool['id']}")
+                blocks.append(
+                    {
+                        "type": "tool_use",
+                        "id": tool_id,
+                        "name": tool["tool_name"],
+                        "input": sanitize_tool_input(parse_input(tool["input_json"]), repo),
+                    }
+                )
+                if tool["file_path"]:
+                    normalized_path = normalize_repo_path(str(tool["file_path"]), repo)
+                    if normalized_path:
+                        touched.add(normalized_path)
+        if not blocks:
+            continue
+        model = str(message["model"] or "")
+        if role == "assistant" and model and not first_model:
+            first_model = model
+        payload: dict[str, Any] = {"role": role, "content": blocks}
+        if role == "assistant" and model:
+            payload["model"] = model
+        line = {
+            "type": role,
+            "uuid": message["source_uuid"] or f"av-{session_id}-{message['ordinal']}",
+            "timestamp": message["timestamp"] or "",
+            "message": payload,
+            "agentsview": meta,
+        }
+        output.append(json.dumps(line, separators=(",", ":")).encode() + b"\n")
+
+        if role == "assistant" and message_tools:
+            result_blocks = []
+            for tool in message_tools:
+                if tool["result_content"] is None and tool["result_content_length"] is None:
+                    continue
+                result = (
+                    str(tool["result_content"] or "")
+                    if include_results
+                    else OMITTED_RESULT
+                )
+                result_blocks.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": str(tool["tool_use_id"] or f"avtool-{tool['id']}"),
+                        "content": result,
+                    }
+                )
+            if result_blocks:
+                result_line = {
+                    "type": "user",
+                    "uuid": f"av-results-{session_id}-{message['ordinal']}",
+                    "timestamp": message["timestamp"] or "",
+                    "message": {"role": "user", "content": result_blocks},
+                    "agentsview": meta,
+                }
+                output.append(
+                    json.dumps(result_line, separators=(",", ":")).encode() + b"\n"
+                )
+
+    if not output:
+        fail(f"AgentsView session has no projectable messages: {session_id}")
+    return b"".join(output), sorted(touched), first_model
+
+
+def atomic_write(path: Path, data: bytes, mode: int = 0o600) -> None:
+    ensure_secure_dir(path.parent)
+    fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        os.fchmod(fd, mode)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_name, path)
+    finally:
+        try:
+            os.unlink(temp_name)
+        except FileNotFoundError:
+            pass
+
+
+def materialize(identifier: str, session_dir: Path) -> tuple[Path, dict[str, Any]]:
+    expected_repo = current_repo()
+    with connect() as conn:
+        conn.execute("BEGIN")
+        session = find_session(conn, identifier, expected_repo)
+        repo = ensure_session_scope(session, expected_repo)
+        duplicate = checkpointed_session(
+            repo,
+            {
+                identifier,
+                unique_attach_id(str(session["id"])),
+            },
+        )
+        if duplicate:
+            fail(
+                f"session {duplicate} is already present on entire/checkpoints/v1; "
+                "use native Entire capture or set ENTIRE_AGENTSVIEW_ALLOW_DUPLICATE=1 after review"
+            )
+        include_results = os.environ.get("ENTIRE_AGENTSVIEW_INCLUDE_TOOL_RESULTS") == "1"
+        transcript, touched, model = project_transcript(
+            conn, session, repo, include_results
+        )
+        path = session_dir / f"{identifier}.jsonl"
+        metadata = {
+            "session_id": identifier,
+            "agent_name": ADAPTER_NAME,
+            "repo_path": str(repo),
+            "session_ref": str(path),
+            "start_time": session["started_at"] or "",
+            "modified_files": touched,
+            "new_files": [],
+            "deleted_files": [],
+            "source": transcript_metadata(session),
+            "model": model,
+            "content_sha256": hashlib.sha256(transcript).hexdigest(),
+            "include_tool_results": include_results,
+        }
+    atomic_write(path, transcript)
+    atomic_write(
+        path.with_suffix(".session.json"),
+        (json.dumps(metadata, indent=2) + "\n").encode(),
+    )
+    return path, metadata
+
+
+def validate_session_dir(raw: str) -> Path:
+    path = Path(raw).expanduser().resolve()
+    repo = current_repo()
+    if repo is None:
+        fail("ENTIRE_REPO_ROOT is required")
+    expected = repo_cache_dir(repo).resolve()
+    if path != expected:
+        fail(f"session directory does not match current repository: {path}")
+    return ensure_secure_dir(path)
+
+
+def validate_transcript_path(raw: str) -> Path:
+    repo = current_repo()
+    if repo is None:
+        fail("ENTIRE_REPO_ROOT is required for read-transcript")
+    path = Path(raw).expanduser().resolve()
+    expected = repo_cache_dir(repo).resolve()
+    if path.parent != expected or path.suffix != ".jsonl":
+        fail(f"transcript does not belong to current repository: {path}")
+    validate_safe_id(path.stem)
+    sidecar = path.with_suffix(".session.json")
+    try:
+        metadata = json.loads(sidecar.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        fail(f"reading AgentsView adapter session metadata: {exc}")
+    source = metadata.get("source") if isinstance(metadata.get("source"), dict) else {}
+    if (
+        metadata.get("session_id") != path.stem
+        or Path(metadata.get("repo_path", "")).resolve() != repo
+        or Path(metadata.get("session_ref", "")).resolve() != path
+        or not source.get("agentsview_session_id")
+    ):
+        fail(f"session metadata does not match transcript: {path}")
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        fail(f"reading cached transcript: {exc}")
+    if hashlib.sha256(raw).hexdigest() != metadata.get("content_sha256"):
+        fail(f"cached transcript digest mismatch: {path}")
+    with connect() as conn:
+        conn.execute("BEGIN")
+        current = exact_session(conn, str(source["agentsview_session_id"]), repo)
+        if not row_matches_identifier(current, path.stem):
+            fail("cached session identity is not bound to the requested attach ID")
+        current_source = transcript_metadata(current)
+        if current_source != source:
+            fail("AgentsView session metadata changed after materialization; resolve it again")
+        projected, _, _ = project_transcript(
+            conn,
+            current,
+            repo,
+            bool(metadata.get("include_tool_results")),
+        )
+    if projected != raw:
+        fail("cached transcript no longer matches the current AgentsView projection")
+    return path
+
+
+def arg_value(args: list[str], name: str, required: bool = True) -> str:
+    try:
+        return args[args.index(name) + 1]
+    except (ValueError, IndexError):
+        if required:
+            fail(f"missing required argument {name}")
+        return ""
+
+
+def stdin_json() -> dict[str, Any]:
+    raw = sys.stdin.buffer.read()
+    if not raw.strip():
+        return {}
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        fail(f"invalid JSON on stdin: {exc}")
+    if not isinstance(value, dict):
+        fail("stdin JSON must be an object")
+    return value
+
+
+def command_info() -> None:
+    emit(
+        {
+            "protocol_version": PROTOCOL_VERSION,
+            "name": ADAPTER_NAME,
+            "type": ADAPTER_TYPE,
+            "description": "AgentsView normalized-session adapter (attach-only preview)",
+            "is_preview": True,
+            "protected_dirs": [],
+            "protected_files": [],
+            "hook_names": [],
+            "capabilities": {
+                "hooks": False,
+                "transcript_analyzer": False,
+                "transcript_preparer": False,
+                "token_calculator": False,
+                "text_generator": False,
+                "hook_response_writer": False,
+                "subagent_aware_extractor": False,
+            },
+        }
+    )
+
+
+def command_detect() -> None:
+    emit({"present": schema_present()})
+
+
+def command_get_session_id() -> None:
+    value = stdin_json()
+    raw = value.get("session_id")
+    if not raw and isinstance(value.get("raw_data"), dict):
+        raw = value["raw_data"].get("agentsview_session_id")
+    emit({"session_id": validate_safe_id(str(raw or ""))})
+
+
+def command_get_session_dir(args: list[str]) -> None:
+    repo = canonical_repo(arg_value(args, "--repo-path"))
+    emit({"session_dir": str(ensure_secure_dir(repo_cache_dir(repo)))})
+
+
+def command_resolve_session_file(args: list[str]) -> None:
+    directory = validate_session_dir(arg_value(args, "--session-dir"))
+    identifier = validate_safe_id(arg_value(args, "--session-id"))
+    path, _ = materialize(identifier, directory)
+    emit({"session_file": str(path)})
+
+
+def command_read_session() -> None:
+    value = stdin_json()
+    identifier = validate_safe_id(str(value.get("session_id") or ""))
+    repo = current_repo()
+    if repo is None:
+        fail("ENTIRE_REPO_ROOT is required for read-session")
+    _, metadata = materialize(identifier, ensure_secure_dir(repo_cache_dir(repo)))
+    source = json.dumps(metadata.pop("source"), separators=(",", ":")).encode()
+    metadata.pop("model", None)
+    metadata["native_data"] = base64.b64encode(source).decode()
+    emit(metadata)
+
+
+def command_write_session() -> None:
+    _ = stdin_json()
+    fail(
+        "write-session is unsupported by the attach-only AgentsView adapter; "
+        "rewind/resume restoration is not implemented"
+    )
+
+
+def command_read_transcript(args: list[str]) -> None:
+    path = validate_transcript_path(arg_value(args, "--session-ref"))
+    try:
+        sys.stdout.buffer.write(path.read_bytes())
+    except OSError as exc:
+        fail(f"reading transcript: {exc}")
+
+
+def command_chunk_transcript(args: list[str]) -> None:
+    try:
+        maximum = int(arg_value(args, "--max-size"))
+    except ValueError:
+        fail("--max-size must be an integer")
+    if maximum <= 0:
+        fail("--max-size must be positive")
+    raw = sys.stdin.buffer.read()
+    emit(
+        {
+            "chunks": [
+                base64.b64encode(raw[index : index + maximum]).decode()
+                for index in range(0, len(raw), maximum)
+            ]
+        }
+    )
+
+
+def command_reassemble_transcript() -> None:
+    value = stdin_json()
+    chunks = value.get("chunks")
+    if not isinstance(chunks, list):
+        fail("chunks must be an array")
+    try:
+        raw = b"".join(base64.b64decode(chunk, validate=True) for chunk in chunks)
+    except (TypeError, ValueError) as exc:
+        fail(f"invalid base64 chunk: {exc}")
+    sys.stdout.buffer.write(raw)
+
+
+def command_format_resume(args: list[str]) -> None:
+    identifier = validate_safe_id(arg_value(args, "--session-id"))
+    repo = current_repo()
+    with connect() as conn:
+        session = find_session(conn, identifier, repo)
+    source_id = str(session["source_session_id"] or session["id"]).rsplit(":", 1)[-1]
+    agent = str(session["agent"]).lower()
+    if agent == "shelley":
+        command = f"shelley client chat -c {source_id}"
+    elif agent == "claude":
+        command = f"claude --resume {source_id}"
+    elif agent == "codex":
+        command = f"codex resume {source_id}"
+    else:
+        command = f"agentsview session get {session['id']}"
+    emit({"command": command})
+
+
+def command_list(args: list[str]) -> None:
+    repo_raw = arg_value(args, "--repo-path", required=False)
+    repo = canonical_repo(repo_raw) if repo_raw else current_repo()
+    agent_filter = arg_value(args, "--agent", required=False).lower()
+    rows = []
+    with connect() as conn:
+        require_schema(conn)
+        for row in conn.execute(session_query() + " ORDER BY ended_at DESC,id"):
+            if AGENT_FILTER and str(row["agent"]).lower() != AGENT_FILTER:
+                continue
+            if agent_filter and str(row["agent"]).lower() != agent_filter:
+                continue
+            if row["parent_session_id"] and os.environ.get("ENTIRE_AGENTSVIEW_ALLOW_CHILD") != "1":
+                continue
+            if repo is not None and probe_repo(str(row["cwd"] or "")) != repo:
+                continue
+            rows.append(
+                {
+                    "attach_id": native_attach_id(row) or unique_attach_id(str(row["id"])),
+                    "unique_attach_id": unique_attach_id(str(row["id"])),
+                    "agentsview_session_id": row["id"],
+                    "source_session_id": row["source_session_id"],
+                    "agent": row["agent"],
+                    "machine": row["machine"],
+                    "project": row["project"],
+                    "cwd": row["cwd"],
+                    "started_at": row["started_at"],
+                    "ended_at": row["ended_at"],
+                    "secret_leak_count": row["secret_leak_count"],
+                    "secrets_rules_version": row["secrets_rules_version"],
+                    "parser_malformed_lines": row["parser_malformed_lines"],
+                    "is_truncated": row["is_truncated"],
+                }
+            )
+    emit({"sessions": rows})
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("command", nargs="?")
+    parsed, rest = parser.parse_known_args()
+    commands = {
+        "info": lambda: command_info(),
+        "detect": lambda: command_detect(),
+        "get-session-id": lambda: command_get_session_id(),
+        "get-session-dir": lambda: command_get_session_dir(rest),
+        "resolve-session-file": lambda: command_resolve_session_file(rest),
+        "read-session": lambda: command_read_session(),
+        "write-session": lambda: command_write_session(),
+        "read-transcript": lambda: command_read_transcript(rest),
+        "chunk-transcript": lambda: command_chunk_transcript(rest),
+        "reassemble-transcript": lambda: command_reassemble_transcript(),
+        "format-resume-command": lambda: command_format_resume(rest),
+        "list": lambda: command_list(rest),
+    }
+    command = commands.get(parsed.command or "")
+    if command is None:
+        fail(f"unsupported subcommand: {parsed.command or '<none>'}")
+    command()
+
+
+if __name__ == "__main__":
+    main()

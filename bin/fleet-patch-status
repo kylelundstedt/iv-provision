@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# fleet-patch-status — is in-place OS patching actually happening?
+#
+# Deliberately ON DEMAND, not scheduled. The point of moving from scheduled
+# recreates to in-place patching was to stop betting on unattended machinery;
+# adding an unattended watcher over it would be the same bet one level up.
+#
+# But an unattended patcher with no visibility is exactly the failure this fleet
+# kept producing — a timer that silently stops, or a VM whose apt sources broke,
+# looks identical to a healthy one. Run this when you want to know.
+#
+# Reports per VM: pending upgrades, how many are security, and the timer's last
+# result and next run. A VM missing the timer entirely is the interesting case:
+# it predates the change or its provision-iv.sh run failed.
+set -uo pipefail
+
+# INVENTORY. Prefer the exe.dev control plane, which is authoritative: a VM that
+# never joined the tailnet is not a peer, so enumerating peers alone is blind
+# exactly where coverage is most likely to be missing.
+#
+# Two paths, because this script now runs on VMs as well as workstations:
+#   - a VM reaches the control plane through an http-proxy integration holding a
+#     token scoped to read-only commands plus `new` (api-exe-new by convention).
+#     No VM has an exe.dev SSH key, and deliberately must not.
+#   - a workstation with the account key uses `ssh exe.dev` directly.
+#
+# Falls back to tailnet peers if neither is available, and says so -- a partial
+# answer beats refusing to run, as long as it is labelled.
+EXE_API=${IV_EXE_API_URL:-https://api-exe-new.int.exe.xyz}
+inventory_source=""
+VMS_JSON=""
+
+if VMS_JSON=$(curl -sS --max-time 30 -X POST "$EXE_API/exec" -d 'ls --json' 2>/dev/null) \
+   && jq -e '.vms' >/dev/null 2>&1 <<<"$VMS_JSON"; then
+  inventory_source="exe.dev (integration)"
+elif VMS_JSON=$(ssh -n -o ConnectTimeout=30 -o BatchMode=yes exe.dev ls --json 2>/dev/null) \
+     && jq -e '.vms' >/dev/null 2>&1 <<<"$VMS_JSON"; then
+  inventory_source="exe.dev (ssh)"
+fi
+
+if [[ -n $inventory_source ]]; then
+  VMS=$(jq -r '.vms[] | select((.tags//[]) | index("mcp-agent")) | .vm_name' <<<"$VMS_JSON" | sort)
+else
+  # No control plane. Tailnet peers are a SUBSET -- report that plainly rather
+  # than letting a partial pass read as a full one.
+  inventory_source="tailnet peers (PARTIAL: control plane unreachable)"
+  VMS=$(tailscale status --json 2>/dev/null \
+        | jq -r '.Peer[]? | select(.Online == true and .OS == "linux") | .HostName' | sort)
+fi
+
+[[ -n "$VMS" ]] || { echo "fleet-patch-status: could not list VMs" >&2; exit 1; }
+echo "inventory: $inventory_source"
+
+printf "%-26s %8s %9s %-10s %s\n" VM PENDING SECURITY RESULT "NEXT RUN"
+stale=0
+# The probe, as one string, so the local and remote paths run IDENTICAL code.
+# Duplicating it would let the two drift, and the local path is the one that
+# reports on the host doing the reporting.
+read -r -d '' PROBE <<'PROBE_EOS'
+sudo apt-get update -qq >/dev/null 2>&1
+p=$(apt list --upgradable 2>/dev/null | grep -c upgradable)
+s=$(apt list --upgradable 2>/dev/null | grep -ci security)
+# A oneshot that has NEVER run also reports Result=success, so ask when it last
+# actually executed before believing that.
+t=$(systemctl show iv-apt-upgrade.service -p ExecMainStartTimestamp --value 2>/dev/null)
+if [ -z "$t" ]; then r=never
+else r=$(systemctl show iv-apt-upgrade.service -p Result --value 2>/dev/null); fi
+n=$(systemctl list-timers iv-apt-upgrade.timer --no-legend 2>/dev/null | awk '{print $1"-"$2}')
+echo "$p|$s|${r:-NO-UNIT}|${n:-none}"
+PROBE_EOS
+
+SELF=$(hostname -s)
+
+for vm in $VMS; do
+    # RUN LOCALLY FOR THIS HOST. `ssh <self>` does not work from the box itself,
+    # so the reporting host reported itself UNREACHABLE -- the one VM guaranteed
+    # to be in every run, and the one whose status was always wrong.
+    if [[ "$vm" == "$SELF" ]]; then
+        out=$(bash -c "$PROBE" 2>/dev/null | tail -1)
+        IFS='|' read -r p s r n <<<"${out:-||UNREACHABLE|}"
+        printf "%-26s %8s %9s %-10s %s\n" "$vm" "${p:-?}" "${s:-?}" "${r:-?}" "${n:-?}"
+        { [[ "${s:-0}" != 0 ]] || [[ "${r:-}" != success ]]; } && stale=$((stale+1))
+        continue
+    fi
+    out=$(ssh -n -o ConnectTimeout=45 "$vm" 'bash -lc "
+        sudo apt-get update -qq >/dev/null 2>&1
+        p=\$(apt list --upgradable 2>/dev/null | grep -c upgradable)
+        s=\$(apt list --upgradable 2>/dev/null | grep -ci security)
+        # A oneshot that has NEVER run also reports Result=success, so ask when
+        # it last actually executed before believing that.
+        t=\$(systemctl show iv-apt-upgrade.service -p ExecMainStartTimestamp --value 2>/dev/null)
+        if [ -z \"\$t\" ]; then r=never
+        else r=\$(systemctl show iv-apt-upgrade.service -p Result --value 2>/dev/null); fi
+        n=\$(systemctl list-timers iv-apt-upgrade.timer --no-legend 2>/dev/null | awk \"{print \\\$1\\\"-\\\"\\\$2}\")
+        echo \"\$p|\$s|\${r:-NO-UNIT}|\${n:-none}\"
+    "' 2>/dev/null | tail -1)
+    IFS='|' read -r p s r n <<<"${out:-||UNREACHABLE|}"
+    printf "%-26s %8s %9s %-10s %s\n" "$vm" "${p:-?}" "${s:-?}" "${r:-?}" "${n:-?}"
+    # Security updates outstanding, no timer, or a failed run all mean the
+    # patching is not doing its job on that box.
+    { [[ "${s:-0}" != 0 ]] || [[ "${r:-}" != success ]]; } && stale=$((stale+1))  # "never" counts as needing attention
+done
+
+echo ""
+if (( stale )); then
+    echo "$stale VM(s) need attention — security updates outstanding, timer missing, or last run not successful."
+    echo "Force one now:  ssh <vm> sudo systemctl start iv-apt-upgrade.service"
+    exit 1
+fi
+echo "all VMs patched and their timers healthy"

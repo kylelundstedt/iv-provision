@@ -1,0 +1,42 @@
+# MCP server manifest — the single declarative source for which MCP servers get
+# registered where. The VM-proxy-URL vs Mac-direct-URL difference is data here.
+#
+# Columns (pipe-separated, fields trimmed):
+#   name    server name as registered (`claude mcp add <name> …`)
+#   layer   team | personal
+#   vm-url  URL used on exe.dev VMs (exe.dev HTTP-proxy integration or direct
+#           OAuth endpoint); `-` = not registered on VMs
+#   mac     macOS registration: a direct URL (OAuth servers), or
+#           `pat:<1p-account>:<op-ref>` = https://api.githubcopilot.com/mcp/
+#           with a Bearer PAT read from 1Password at install time, or
+#           `codex:<url>` = registered in Codex ONLY. Claude Code gets the same
+#           services as claude.ai connectors, so a local OAuth row there is a
+#           duplicate that sits at "Needs authentication" forever (2026-09-10
+#           Mac audits); install.sh removes such a row from Claude Code if
+#           present. Codex has no connectors, so it keeps them.
+#
+# Layers:
+#   team      seeded on VMs by iv-image (agent/setup-mcp.sh, at a pinned
+#             dotfiles commit); dotfiles also applies the mac column on macOS.
+#   personal  registered by dotfiles install.sh only (VMs and Macs).
+#
+# hub-mcp is intentionally NOT listed: its registration is a dynamic
+# reachability probe in install.sh (localhost on klundstedt-mini, tailnet URL
+# on Macs that can reach it, absent elsewhere).
+#
+# Consumers: install.sh setup_agents; iv-image agent/setup-mcp.sh (team rows,
+# vm-url column). Checked by diff-provisioning.sh.
+#
+# github-work has vm-url `-` as of 2026-07-28: the `github-mcp-work` integration
+# was detached from `auto:all` to `(none)` because NO VM has a work-org repo
+# integration — every fleet GitHub repo integration is `repos=kylelundstedt/*`. Registering it on a VM produced an MCP server that
+# 403s ("Needs authentication"); several VMs were in that state. If a work-org task
+# ever lands on a VM, attach `github-mcp-work` to that VM directly and register
+# the server there — do not restore the vm-url column, which would put work-org
+# GitHub API access back on every VM.
+
+motherduck | team | https://mcp-motherduck.int.exe.xyz/mcp | codex:https://api.motherduck.com/mcp
+github-work | team | - | pat:industryvault.1password.com:op://Employee/GitHub PAT IV/token
+github-home | personal | https://mcp-github-home.int.exe.xyz/mcp/ | pat:lundstedts.1password.com:op://Private/GitHub PAT Home/token
+tigris | personal | https://mcp.storage.dev/mcp | codex:https://mcp.storage.dev/mcp
+readwise | personal | https://mcp2.readwise.io/mcp | codex:https://mcp2.readwise.io/mcp

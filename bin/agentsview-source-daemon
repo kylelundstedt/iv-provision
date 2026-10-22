@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# Foreground AgentsView source daemon for agent-capable IV VMs. systemd owns
+# this process.
+#
+# Bound to LOOPBACK. The only way in is the VM's own exe.dev auth proxy, which
+# admits the account owner and any VM holding a peer integration to this VM --
+# in practice the global collector (iv-agentsview) through its av-src-<vm>
+# integration. Nothing on the tailnet or the exe.dev internal network can reach
+# port 8080 directly (measured 2026-09-06 on a fleet VM: eth0 and tailnet probes
+# refused, integration path 200). The tailnet is no longer on this data path.
+#
+# The sync token is the public fleet constant, written by provision-iv.sh. With
+# reachability enforced at the exe.dev edge it is a protocol formality that
+# AgentsView's HTTP sync happens to require, not a secret; no --require-auth.
+set -euo pipefail
+umask 077
+
+: "${AGENTSVIEW_AUTH_TOKEN:?AGENTSVIEW_AUTH_TOKEN is required}"
+
+# AgentsView otherwise falls forward to a different port when 8080 is busy,
+# which would leave the collector polling a dead endpoint. Fail closed instead.
+if command -v ss >/dev/null 2>&1 && ss -ltnH '( sport = :8080 )' 2>/dev/null | grep -q .; then
+  echo "agentsview-source: TCP port 8080 is already in use" >&2
+  exit 1
+fi
+
+DATA_DIR=${AGENTSVIEW_DATA_DIR:-$HOME/.agentsview}
+mkdir -p "$DATA_DIR"
+chmod 700 "$DATA_DIR"
+export AGENTSVIEW_DATA_DIR="$DATA_DIR"
+
+# Zed's agent threads live on the CLIENT, not on a remote server: a VM's
+# ~/.local/share/zed holds only the remote-server payload (a ~210MB node
+# runtime, extensions, prettier) and never a threads database. Left at its
+# default, discovery exposes that tree and the collector mirrors it every sync
+# — 74% of all mirrored bytes on 2026-07-22, for zero sessions. Point ZED_DIR
+# at an empty directory instead. Remove this if Zed ever stores threads
+# server-side.
+ZED_DIR=${ZED_DIR:-$HOME/.config/agentsview/no-zed}
+mkdir -p "$ZED_DIR"
+export ZED_DIR
+
+AGENTSVIEW_BIN=${AGENTSVIEW_BIN:-/usr/local/bin/agentsview}
+[[ -x $AGENTSVIEW_BIN ]] || {
+  echo "agentsview-source: binary not executable: $AGENTSVIEW_BIN" >&2
+  exit 1
+}
+
+# AgentsView rejects a request whose Host is not its trusted origin. Through
+# the exe.dev proxy the Host that arrives is this VM's own public name with the
+# port -- not the caller's av-src-<vm>.int.exe.xyz alias (measured 2026-09-06).
+HOSTNAME=$(hostname -s)
+PUBLIC_URL="https://${HOSTNAME}.exe.xyz:8080"
+
+exec "$AGENTSVIEW_BIN" serve \
+  --host 127.0.0.1 \
+  --port 8080 \
+  --public-url "$PUBLIC_URL" \
+  --no-browser \
+  --no-update-check

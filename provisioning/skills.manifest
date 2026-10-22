@@ -1,0 +1,56 @@
+# Agent skills manifest — the single declarative source for which skills get
+# installed where. Consumers apply it per platform; this file is only the list.
+#
+# Columns (whitespace-separated; args = everything after method):
+#   layer   team | personal | mac
+#   method  npx  — `npx -y skills add -g -y <args>`
+#           curl — `<name> <url>`: fetch <url> to ~/.agents/skills/<name>/SKILL.md
+#   args    method-specific (see above)
+#
+# Layers:
+#   team      baked into iv-image (vendor-skills.sh vendors these at a pinned
+#             dotfiles commit); dotfiles installs them on macOS only — Linux VMs
+#             get them from the image.
+#   personal  dotfiles-only, installed on every machine by install.sh.
+#   mac       dotfiles-only, macOS only, NOT vendored into iv-image. For skills
+#             that are meaningless on a Linux VM. `npx` args of `.` install from
+#             this repo (install.sh runs npx from $DOTFILES_DIR).
+#
+# Consumers: install.sh setup_agents (macOS: team+personal+mac, Linux:
+# personal); iv-image vendor-skills.sh (team). Checked by diff-provisioning.sh
+# and by test-install.sh provisioning (manifest vs what is on disk).
+
+team npx matsonj/mviz
+team npx vercel-labs/skills -s find-skills
+team npx duckdb/duckdb-skills
+team npx motherduckdb/agent-skills
+team npx posit-dev/skills -s quarto-authoring brand-yml
+team npx marimo-team/skills -s marimo-notebook marimo-batch
+# herdr: teaches agents to drive herdr from inside a herdr pane (inspect/split
+# panes, run without stealing focus, start helper agents). No-ops unless
+# HERDR_ENV=1. Team: agents run in herdr on VMs too (iv-image re-vendors it).
+team npx ogulcancelik/herdr -s herdr
+# tailscale: Tailscale's own skill (alpha, tailscale/tailscale-skill). Team,
+# because the fleet's tailnet is a provisioning concern, not a personal one:
+# every VM joins in provision-iv.sh, and the failures are policy-file and
+# auth-key shaped -- tagOwners, OAuth scopes, `tag:dev` vs the exe.dev `tailnet`
+# tag. Those cost most of a debugging cycle on 2026-08-23 (see
+# exeslim/iv-tailnet-join.sh) because the answer lived in Tailscale's docs and
+# nothing on the VM carried them.
+#
+# NOTE it is the vendor's own skill, so what it teaches is upstream's model, NOT
+# this fleet's. It does not know about `api-tailscale`, the edge-injected
+# credential, or the join path in provision-iv.sh -- iv-infra tailnet.md and the
+# join-tailnet skill remain the authority on those, and this skill's generic
+# `tailscale up --auth-key=` advice is wrong here. Kept adjacent rather than
+# merged for exactly that reason.
+team npx tailscale/tailscale-skill
+# archil-guide has no GitHub repo — fetched directly
+team curl archil-guide https://archil.com/skill.md
+
+personal npx tigrisdata/tigris-agents-plugins
+personal npx marimo-team/marimo-pair
+personal npx kylelundstedt/dotfiles -s sprites-dev join-tailnet upgrade-vm exe-dev
+# apple-containers is private (macOS-only, this repo) — installed from `.`, not
+# published to a skills repo and not vendored into iv-image
+mac npx . -s apple-containers

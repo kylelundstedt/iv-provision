@@ -1,0 +1,26 @@
+# pinned exeuntu source from the retired image workflow is not vendored
+exeuntu/
+# Bulky third-party payloads inside otherwise-vendored skills: mviz ships sample
+# PDFs and screenshots (~1 MB) that no agent needs on a VM. The SKILL.md itself IS
+# tracked -- an ignore rule does not affect an already-tracked file -- so the skill
+# works; only the ballast is excluded.
+#
+# herdr used to be excluded the same way, for a full source checkout
+# (vendor/libghostty-vt, portable-pty) it no longer ships: upstream is now a single
+# 16 KB SKILL.md. The exclusion outlived its reason and quietly broke the skill --
+# skills.manifest lists herdr as a `team` row, but nothing under skills/herdr was
+# ever committed, so provisioning shipped 36 skills where the manifest asked for 37
+# and no VM has ever had it. Removed 2026-08-18.
+skills/mviz/*.pdf
+skills/mviz/*.png
+# generated/local output
+*.log
+
+/.quarto/
+/.ruff_cache/
+**/__pycache__/
+**/*.py[cod]
+**/*.quarto_ipynb
+/_site/
+# provision-docsite's served releases + current symlink (per-VM state, like _site)
+/.docsite/
