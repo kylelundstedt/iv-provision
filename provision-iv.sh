@@ -45,9 +45,9 @@ ENTIRE_PLUGIN_VERSION=0.1.3
 # Both agents self-update. Like Shelley, a pinned install can therefore drift;
 # unlike Shelley there is no IV requirement for a specific build, so drift is
 # accepted and re-provisioning simply restores the pin.
-CLAUDE_CODE_VERSION=2.1.296
+CLAUDE_CODE_VERSION=2.1.308
 CODEX_VERSION=0.162.1
-UV_VERSION=0.12.0
+UV_VERSION=0.13.5
 
 DUCKDB_SHA256_AMD64=35caef1fecbc8d7e2c07de4fd2cdefc5189ec9ba9e1cca228fb1a1c48cc52a8a
 DUCKDB_SHA256_ARM64=5e2399428793642e994f1584c47d49f4c58b7b4ec2297ea4a522353a6c553835
@@ -79,15 +79,15 @@ ENTIRE_AGENTSVIEW_SHA256=c75d5459537d208b0ad674f97cd8a1814376f23b2a23a52d3e6fd97
 # claude: from the release's SHASUMS256.txt. codex: computed at pin time (the
 # release publishes .sigstore attestations, not a plain checksum file).
 # uv: from the asset's own .sha256 file.
-CLAUDE_CODE_SHA256_AMD64=45fe2b33f5cbdd114309618970bcd90b8b163e34252d66cf100d7e068d9b831d
-CLAUDE_CODE_SHA256_ARM64=c644ad3e5ca3367e75d198194189d13180f33c491304c2d19557f7c1e8d5e0a6
+CLAUDE_CODE_SHA256_AMD64=6a699c7205d3c5f99e03a21d6b0511366f41c9a7284547b6e0785504ebdb261a
+CLAUDE_CODE_SHA256_ARM64=196b868da6b7c1105c55aa44f3d99c1f7d1325559940924dca92da9e4c6f12a0
 CODEX_SHA256_AMD64=86f268d81b898f3e144c5ecff2ad2fda2c5802e042d6195b72538fe0fa125057
 CODEX_SHA256_ARM64=bf3ca2719f1143b1440fbd85c149379e696c782c50ad7991f8bfcec60b2600c1
 # Code Mode host: a separate release asset, versioned with CODEX_VERSION.
 CODEX_CODE_MODE_HOST_SHA256_AMD64=458239ea45c1fc508d89695f180ab352f2834709a8a46929a4466f4f04399ada
 CODEX_CODE_MODE_HOST_SHA256_ARM64=1395ce9367f8acd280674dff083edf25bf221d908b8351d5bd4f3fdde9181e9a
-UV_SHA256_AMD64=eaf842262aa1c418d8ecc5605f02ee1ebfd369124fa48548e85f9481a47831a9
-UV_SHA256_ARM64=2c5d6e3092cc5223b10ff403880cc75121bf64e84644e7a0c69f643b0d89ac95
+UV_SHA256_AMD64=f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f
+UV_SHA256_ARM64=4bb69cf95ed13f23713bb7bc09f241896ea0c75b7c557e615a20604b82f9c403
 
 if [[ $EUID -eq 0 ]]; then
   echo "provision-iv: run as the VM login user, not with sudo" >&2
@@ -867,12 +867,16 @@ install_uv() {
 #
 # Cheap: uv already downloads a managed CPython for its own tools, so --default
 # mostly adds the python/python3 shims to ~/.local/bin.
+#
+# The minor version is explicit: uv 0.13 moved its unversioned default from 3.14
+# to 3.15, which would have silently split the fleet (existing VMs keep 3.14,
+# since this returns early once python3 exists; new VMs would get 3.15).
 install_python() {
   local actual
   actual=$("$HOME/.local/bin/python3" --version 2>/dev/null | awk '{print $2}' || true)
   echo "== python3 (uv-managed; installed: ${actual:-missing}) =="
   [[ -n $actual ]] && return
-  "$HOME/.local/bin/uv" python install --default
+  "$HOME/.local/bin/uv" python install 3.14 --default
   [[ -x $HOME/.local/bin/python3 ]]
 }
 
