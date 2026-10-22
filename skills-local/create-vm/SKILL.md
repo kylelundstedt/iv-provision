@@ -91,7 +91,7 @@ itself. Create and provision in **one call**. Copy this verbatim, substituting
 only the name and sizes:
 
 ```bash
-curl -s --max-time 300 -X POST https://api-exe-new.int.exe.xyz/exec -d "new --name=<name> --tag=tailnet --image=ghcr.io/kylelundstedt/exeslim-dev:2026-09-15.29.1 --cpu=2 --memory=8GB --disk=15GB --prompt='sudo systemd-run --unit=iv-provision --collect --property=Type=oneshot --property=TimeoutStartSec=3600 --uid=exedev --setenv=HOME=/home/exedev /bin/bash -lc \"git clone https://github.com/kylelundstedt/iv-provision.git ~/iv-provision && git -C ~/iv-provision checkout 4.0.1 && ~/iv-provision/provision-iv.sh\"'"
+curl -s --max-time 300 -X POST https://api-exe-new.int.exe.xyz/exec -d "new --name=<name> --tag=tailnet --image=ghcr.io/kylelundstedt/exeslim-dev:2026-10-22.40.1 --cpu=2 --memory=8GB --disk=15GB --prompt='sudo systemd-run --unit=iv-provision --collect --property=Type=oneshot --property=TimeoutStartSec=3600 --uid=exedev --setenv=HOME=/home/exedev /bin/bash -lc \"git clone https://github.com/kylelundstedt/iv-provision.git ~/iv-provision && git -C ~/iv-provision checkout 4.0.2 && ~/iv-provision/provision-iv.sh\"'"
 ```
 
 `--tag=tailnet` carries the `api-tailscale` integration, which is what lets
@@ -199,7 +199,7 @@ this one call made for it, or the same check keeps reporting it -- by design.
 systemd, TLS roots, curl. **No Shelley, no toolchain.** Image only:
 
 ```
-new --name=<name> --image=ghcr.io/kylelundstedt/exeslim:2026-09-15.29.1 --cpu=2 --memory=8GB --disk=15GB
+new --name=<name> --image=ghcr.io/kylelundstedt/exeslim:2026-10-22.40.1 --cpu=2 --memory=8GB --disk=15GB
 ```
 
 Do **not** add `--prompt`: `new --prompt` requires an image with Shelley, so it
@@ -231,11 +231,17 @@ it by deleting the node (iv-infra `retiring.md` §5).
 
 | What                         | Value             |
 | ---------------------------- | ----------------- |
-| image build ID (both images) | `2026-09-15.29.1` |
-| `iv-provision` tag           | `4.0.1`           |
+| image build ID (both images) | `2026-10-22.40.1` |
+| `iv-provision` tag           | `4.0.2`           |
 
 Both images publish the same `<date>.<run>.<attempt>` build ID from one pipeline,
 so a single verified ID pins both. Bump them here when they move.
+
+**Do not pin below `2026-10-22.40.1`.** It is the first build carrying
+`ca-certificates 20260816ubuntu0.24.04.1`, which distrusts emSign ECC Root CA - G3
+after the eMudhra intermediate compromise (exe.dev bulletin, 2026-10-20). Earlier
+builds bake in `20260601~24.04.1` and trust it until the first daily
+`iv-apt-upgrade` run.
 
 **`2026-09-15.29.1`** is the first build whose prod-lane boot join
 (`iv-tailnet-join`) mints **non-ephemeral** nodes with 10-minute one-use keys, so
@@ -327,7 +333,7 @@ observed on a run that completed two seconds earlier. Go verify; do not recreate
 recipe. Re-provision at the right tag over the tailnet:
 
 ```bash
-ssh <name> 'cd ~/iv-provision && git fetch --tags --quiet && git checkout --detach 4.0.1 && ~/iv-provision/provision-iv.sh'
+ssh <name> 'cd ~/iv-provision && git fetch --tags --quiet && git checkout --detach 4.0.2 && ~/iv-provision/provision-iv.sh'
 ```
 
 **If the VM is on the tailnet but the lock never appears**, provisioning started
@@ -349,7 +355,7 @@ Recovery depends on who is asking:
 
   ```bash
   ssh <name>.exe.xyz "git clone https://github.com/kylelundstedt/iv-provision.git ~/iv-provision \
-    && git -C ~/iv-provision checkout 4.0.1 \
+    && git -C ~/iv-provision checkout 4.0.2 \
     && ~/iv-provision/provision-iv.sh"
   ```
 
