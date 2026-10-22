@@ -94,8 +94,12 @@ See `consuming.md` for repo-integration and doc-site details.
 
 ## 5. Personal overlay (optional)
 
+The dotfiles repo is private, so the VM needs read access to it first:
+
 ```bash
-ssh <vm>.exe.xyz "curl -fsSL https://raw.githubusercontent.com/kylelundstedt/dotfiles/master/install.sh | bash"
+ssh exe.dev integrations attach repo-dotfiles-ro vm:<vm>
+ssh <vm>.exe.xyz "git clone https://github.int.exe.xyz/kylelundstedt/dotfiles.git ~/dotfiles \
+  && ~/dotfiles/install.sh"
 ```
 
 Personal dotfiles layer on top of the team defaults — they overlay `AGENTS.md`,
