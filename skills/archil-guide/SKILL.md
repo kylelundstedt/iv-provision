@@ -16,7 +16,7 @@ This file is a lightweight overview. For depth on any topic, follow the links in
 - **[Serverless Execution](#serverless-execution)** — run bash/python/node with the disk mounted
 - **[TypeScript SDK](#typescript-sdk)** — programmatic access from Node.js
 - **[Mount Semantics](#mount-semantics)** — shared mode, delegations, consistency, cache
-- **[Mounting](#mounting)** — Linux, macOS, and the exec container runtime
+- **[Mounting](#mounting)** — Linux, macOS, and the exec microVM
 - **[Data Sources](#data-sources)** — S3, GCS, R2, S3-compatible, Azure Blob
 
 ## Quick Setup
@@ -59,7 +59,7 @@ npx disk list
 
 If this returns your disks, you're ready. If it fails, check your API key and region.
 
-**Step 4 — Test execution (AWS regions only):**
+**Step 4 — Test execution (public AWS regions or BYOC):**
 
 ```bash
 npx disk exec <disk-id> "echo hello from archil && ls -la"
@@ -110,9 +110,9 @@ Full reference: [disk-cli-reference.md](https://archil.com/skill/disk-cli-refere
 
 ## Serverless Execution
 
-`disk exec` launches a container with the disk mounted at `/mnt/data`, runs a command, and returns stdout/stderr/exit code and timing. Files persist on the disk across exec calls; container state does not.
+`disk exec` launches a Firecracker microVM with the disk mounted at `/mnt/archil`, runs a command, and returns stdout/stderr/exit code and timing. Files persist on the disk across exec calls; VM state does not.
 
-**AWS-only today**: `aws-us-east-1`, `aws-us-west-2`, `aws-eu-west-1`. GCP does not support exec.
+**Public regions**: exec runs in `aws-us-east-1`, `aws-us-west-2`, and `aws-eu-west-1`. The public GCP region does not support exec. BYOC deployments support exec on any cloud or bare metal.
 
 ### Limits
 
@@ -120,16 +120,15 @@ Full reference: [disk-cli-reference.md](https://archil.com/skill/disk-cli-refere
 |-------|-------|
 | Command timeout | 5 minutes |
 | stdout / stderr cap | 128 KiB each |
-| Billing | `executeMs` only, 1ms granularity, 100ms minimum |
-| Queue time | Not billed |
+| Billing | Per call: $0.05 per 1,000 calls on Developer and Team. See [pricing](https://archil.com/pricing) |
 
 ### Exec Runs in Shared Mode
 
-The exec container is just another mounted client and mounts in **shared mode**, so [mount semantics](#mount-semantics) apply — in particular, [delegations](https://archil.com/skill/delegations.md). Dynamic ownership auto-claims new subdirectories, so most short-lived execs never notice. When writes do fail with `Read-only file system`, you have two clean fixes: scope writes to a fresh per-job subdirectory, or run `archil checkout <path>` inside the exec command itself (the `archil` CLI is available in the container).
+The exec microVM is just another mounted client and mounts in **shared mode**, so [mount semantics](#mount-semantics) apply — in particular, [delegations](https://archil.com/skill/delegations.md). Dynamic ownership auto-claims new subdirectories, so most short-lived execs never notice. When writes do fail with `Read-only file system`, you have two clean fixes: scope writes to a fresh per-job subdirectory, or run `archil checkout <path>` inside the exec command itself (the `archil` CLI is available in the microVM).
 
 ### Pre-installed Tools
 
-The exec container includes `coreutils`, `grep`, `sed`, `awk`, `find`, `curl`, `jq`, `python3`, `node`, and the `archil` CLI.
+The exec microVM includes `coreutils`, `grep`, `sed`, `awk`, `find`, `curl`, `jq`, `python3`, `node`, and the `archil` CLI.
 
 ### Common Patterns
 
@@ -138,11 +137,11 @@ The exec container includes `coreutils`, `grep`, `sed`, `awk`, `find`, `curl`, `
 npx disk exec <id> "git clone https://github.com/user/repo.git && cd repo && npm i && npm run build"
 
 # Persistent agent workspace
-npx disk exec <id> "mkdir -p /mnt/data/workspace && echo 'session note' >> /mnt/data/workspace/log.txt"
+npx disk exec <id> "mkdir -p /mnt/archil/workspace && echo 'session note' >> /mnt/archil/workspace/log.txt"
 
 # Fan-out in bash
 for f in file1 file2 file3; do
-  npx disk exec <id> "grep -c ERROR /mnt/data/logs/$f" &
+  npx disk exec <id> "grep -c ERROR /mnt/archil/logs/$f" &
 done; wait
 ```
 
@@ -168,10 +167,10 @@ Full reference: [typescript-sdk.md](https://archil.com/skill/typescript-sdk.md).
 
 ## Mount Semantics
 
-Every Archil mount — on a Linux host, in macOS Finder, or inside a `disk exec` container — shares the same model. Understand this once and it applies everywhere.
+Every Archil mount — on a Linux host, in macOS Finder, or inside a `disk exec` microVM — shares the same model. Understand this once and it applies everywhere.
 
 - **Single-client (exclusive) mode**: default on Linux. One client owns the whole disk; all writes work immediately.
-- **Shared mode**: default on Archil.app (macOS), exec containers, and Linux with `--shared`. Multiple clients mount concurrently. Reads always work; writes require holding a **delegation** (exclusive ownership of a path).
+- **Shared mode**: default on Archil.app (macOS), exec microVMs, and Linux with `--shared`. Multiple clients mount concurrently. Reads always work; writes require holding a **delegation** (exclusive ownership of a path).
 - **Delegations** are recursive — owning a directory covers every file beneath it. Only one client can hold a delegation on a given path at a time.
 - **Dynamic ownership**: creating a new file/directory in an unowned location auto-claims it. Covers most short-lived exec writes automatically. Does **not** extend to deleting or rewriting existing files.
 - **Release**: `archil checkin <path>` on Linux / in exec, right-click → Check In on macOS, or unmount (auto-releases everything).
@@ -207,9 +206,9 @@ macOS uses an FSKit-based menu bar app, **not a CLI**. Requires macOS 26 (Tahoe)
 
 Docs: https://docs.archil.com/mounting/macos.
 
-### Inside `disk exec` Containers
+### Inside `disk exec` microVMs
 
-Each exec container mounts the disk automatically at `/mnt/data` in shared mode — no install step needed. The `archil` CLI is available inside the container if you need to explicitly `checkout`/`checkin` a path. See [Exec Runs in Shared Mode](#exec-runs-in-shared-mode).
+Each exec microVM mounts the disk automatically at `/mnt/archil` in shared mode — no install step needed. The `archil` CLI is available inside the microVM if you need to explicitly `checkout`/`checkin` a path. See [Exec Runs in Shared Mode](#exec-runs-in-shared-mode).
 
 ---
 
@@ -234,7 +233,7 @@ Docs: https://docs.archil.com/data-sources/s3-object-storage.
 | Component | Cost |
 |-----------|------|
 | Active cached data | $0.20/GiB-month (time-weighted average) |
-| Serverless exec | Billed on `executeMs` (1ms granularity, 100ms floor) |
+| Serverless exec | Billed per call ($0.05 per 1,000 calls on Developer and Team) |
 | API calls, transfers, reads, metadata | Free |
 
 Cache expires ~1 hour after last access; you only pay for data actively in the cache. Full model: https://docs.archil.com/administration/billing.
@@ -250,11 +249,11 @@ Quick index. Full guide: [troubleshooting.md](https://archil.com/skill/troublesh
 | `archil: command not found` (macOS) | No CLI on macOS. Use `npx disk` or Archil.app |
 | Mount permission denied | Use `sudo --preserve-env=ARCHIL_MOUNT_TOKEN` |
 | Auth failure | Verify `ARCHIL_API_KEY` with `npx disk list` |
-| `Read-only file system` on write | You haven't checked out a delegation on the path you're writing to. Run `archil checkout <path>` (Linux or inside an exec container), or write into a fresh subdirectory so dynamic ownership claims it for you. Full model: [delegations.md](https://archil.com/skill/delegations.md) |
+| `Read-only file system` on write | You haven't checked out a delegation on the path you're writing to. Run `archil checkout <path>` (Linux or inside an exec microVM), or write into a fresh subdirectory so dynamic ownership claims it for you. Full model: [delegations.md](https://archil.com/skill/delegations.md) |
 | S3 sync delay | Expected — eventual consistency (seconds to minutes) |
 | Exec timeout | Commands must complete within 5 minutes |
 | stdout truncated | Exec caps at 128 KiB — pipe to file on disk |
-| Exec not available in region | Exec is AWS-only today |
+| Exec not available in region | In public regions, exec runs only in the AWS regions. Create the disk in an AWS region, or use BYOC |
 | npm EACCES | Use `npx disk` (no install) rather than a global install |
 
 ## Workload-Specific Guidance
@@ -287,11 +286,15 @@ Full docs: https://docs.archil.com/llms.txt
 | TypeScript SDK | https://docs.archil.com/sdks/typescript |
 | `disk` CLI | https://docs.archil.com/reference/disk-cli |
 | `archil` CLI (Linux) | https://docs.archil.com/reference/archil-cli |
-| Agent Bash Tool | https://docs.archil.com/guides/ai/bash-tool |
-| Multi-Agent Systems | https://docs.archil.com/guides/ai/multi-agent-systems |
-| FAISS Vector Search | https://docs.archil.com/guides/ai/faiss |
+| Agent Bash Tool (Quickstart) | https://docs.archil.com/getting-started/quickstart |
+| Coding Agent in a Sandbox | https://docs.archil.com/guides/agents/coding-agent |
+| Code Interpreter | https://docs.archil.com/guides/agents/code-interpreter |
+| Claude Code / OpenCode / Codex | https://docs.archil.com/guides/agents/claude-code |
+| Parallel Agents | https://docs.archil.com/guides/agents/parallel-agents |
+| Vector Search (LanceDB) | https://docs.archil.com/guides/agents/vector-search |
+| Evals and RL Environments | https://docs.archil.com/guides/training/rl-environments |
 | S3 Data Source | https://docs.archil.com/data-sources/s3-object-storage |
-| Shared Disks | https://docs.archil.com/concepts/shared-disks |
+| Sharing Disks | https://docs.archil.com/concepts/sharing-disks |
 | Pricing | https://docs.archil.com/administration/billing |
 | Terraform | https://docs.archil.com/reference/terraform |
 | K8s CSI Driver | https://docs.archil.com/reference/csi-driver |
@@ -300,6 +303,6 @@ Full docs: https://docs.archil.com/llms.txt
 | macOS Mount | https://docs.archil.com/mounting/macos |
 | Linux Mount | https://docs.archil.com/mounting/linux |
 | Container Mount | https://docs.archil.com/mounting/containers |
-| PostgreSQL | https://docs.archil.com/guides/databases/postgres |
-| SQLite | https://docs.archil.com/guides/databases/sqlite |
-| Jupyter | https://docs.archil.com/guides/data-science/jupyter-serverless |
+| PostgreSQL | https://docs.archil.com/guides/apps/postgres |
+| SQLite | https://docs.archil.com/compute/sqlite |
+| DuckDB Analytics | https://docs.archil.com/guides/analytics/duckdb |

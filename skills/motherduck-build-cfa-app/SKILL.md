@@ -23,8 +23,11 @@ Resolve the target from the request or active context. Ask only if ambiguity mat
   - app-side policy and UX control are limited
   - a backend can create embed sessions and keep admin tokens server-side
 - **DuckDB-Wasm** is acceptable only for small, browser-side, read-only workloads.
+- Default per-tenant build (read hypertenancy): a writer service account owns one database per tenant; each tenant gets a reader service account, a restricted hidden share of its database granted to that reader, a one-hour read-write token used once to attach the share, and a read-scaling token the backend uses. See archetype 6 in `motherduck-security-governance` (`references/ACCESS_CONTROL_SETUPS.md`) and manage it with Terraform.
 - **Single shared tenant_id filtering** is the fallback, not the recommendation.
-- A filtered Share can expose a curated table/view subset to one audience, but it is not row-level tenant isolation. Different audiences need separate Shares or stronger structural boundaries.
+- A filtered Share exposes a curated table/view subset. Secure views on a Share add row filters, hidden columns, and masking keyed on the consumer's identity (`current_user` for a per-customer service account), which can serve a modest number of customers from one database. Keep a database per customer as the default when tenants need independent compute, data lifecycle, or contractual isolation.
+- Bound backend connects with `connection_timeout` so a cold Duckling fails over instead of hanging a request.
+- Embedded Dives are read-only and cannot run Flights; in-app actions go through the backend API.
 - For embedded Dives, validate `postMessage` origin/type/payload, use `initial_state` only for JSON-serializable UI state, and keep navigation, export, and persistence policy in the host application.
 
 ## Workflow
@@ -44,7 +47,7 @@ Resolve the target from the request or active context. Ask only if ambiguity mat
 
 Match execution to the request: answer, review, or planning work returns the requested architecture artifacts; build or change work creates the requested in-scope files or services and validates them. Ask before destructive actions, external writes not already requested, or a material expansion of scope.
 
-When this skill produces a native DuckDB (`md:`) connection, watermark it with `custom_user_agent=agent-skills/2.6.0(harness-<harness>;llm-<llm>)`. If metadata is missing, fall back to `harness-unknown` and `llm-unknown`.
+When this skill produces a native DuckDB (`md:`) connection, watermark it with `custom_user_agent=agent-skills/3.0.0(harness-<harness>;llm-<llm>)`. If metadata is missing, fall back to `harness-unknown` and `llm-unknown`.
 
 ## Output
 
@@ -81,3 +84,5 @@ Load related skills only for missing capabilities; reuse established context.
 - `motherduck-model-data` -- design analytics-ready per-customer tables
 - `motherduck-query` -- validate serving queries and latency-sensitive aggregations
 - `motherduck-load-data` -- build ingestion paths for customer-facing data refresh
+- `motherduck-rest-api` -- provision per-customer service accounts, tokens, and Dive embed sessions
+- `motherduck-security-governance` -- review the isolation boundary and access model

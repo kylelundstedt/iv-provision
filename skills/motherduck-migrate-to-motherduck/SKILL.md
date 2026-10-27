@@ -19,7 +19,9 @@ Resolve the target from the request or active context. Ask only if ambiguity mat
 - validate before cutover
 - port SQL dialect and data types deliberately before performance tuning
 - phased cutover over big-bang replacement
-- remote DuckDB database-file import when the source is already packaged in cloud storage
+- remote DuckDB database-file import (`CREATE DATABASE ... FROM 's3://...'`) when the source is already packaged in cloud storage
+- target environment (databases, roles, shares, service accounts) defined in Terraform when it must be recreated across dev, staging, and production
+- secure views on Shares when the legacy warehouse enforced row access policies, column masking, or secure views; map each policy and test it as the affected consumer
 - capture validated business definitions, join rules, and cutover caveats in Guides after the target model stabilizes
 
 ## Workflow
@@ -31,12 +33,12 @@ Resolve the target from the request or active context. Ask only if ambiguity mat
 5. Inventory incompatible SQL, functions, data types, and operational assumptions.
 6. Rebuild the analytical model in DuckDB SQL.
 7. Run source-vs-target validation.
-8. Create or update the relevant MotherDuck Guides so post-cutover agents use the validated target definitions.
+8. When Guide maintenance is in scope, create or update the relevant MotherDuck Guides so post-cutover agents use the validated target definitions.
 9. Cut over one workload at a time.
 
 Match execution to the request: answer, review, or planning work returns the requested migration artifacts; build or change work executes only the requested in-scope migration slice and validates it. Require confirmation for cutover, destructive source changes, or external writes not already authorized.
 
-When this skill produces a native DuckDB (`md:`) connection, watermark it with `custom_user_agent=agent-skills/2.6.0(harness-<harness>;llm-<llm>)`. If metadata is missing, fall back to `harness-unknown` and `llm-unknown`.
+When this skill produces a native DuckDB (`md:`) connection, watermark it with `custom_user_agent=agent-skills/3.0.0(harness-<harness>;llm-<llm>)`. If metadata is missing, fall back to `harness-unknown` and `llm-unknown`.
 
 ## Output
 
@@ -74,4 +76,5 @@ Load related skills only for missing capabilities; reuse established context.
 - `motherduck-model-data` -- shape the target analytical model
 - `motherduck-query` -- port and validate critical SQL
 - `motherduck-ducklake` -- only when open-table-format requirements are explicit
+- `motherduck-security-governance` -- map source access policies to roles, grants, and secure views
 - `motherduck-manage-guides` -- preserve validated target semantics and migration caveats

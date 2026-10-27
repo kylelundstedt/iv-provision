@@ -1,6 +1,6 @@
 ---
 name: motherduck-pricing-roi
-description: Assess MotherDuck costs, plan fit, and ROI using current pricing and the workload’s compute and storage needs.
+description: Assess MotherDuck costs, plan fit, cost attribution, and ROI from the workload's compute and storage needs.
 license: MIT
 ---
 
@@ -14,12 +14,15 @@ license: MIT
 
 ## Default Posture
 
+- To find what drives spend, group `md_information_schema.query_history` by `user_agent` (workload tags from `custom_user_agent`; Flight queries start with `md-flights(<flight_id>`), user or service account, and `instance_type`; the Duckling Overview shows the same in the UI. Recommend tagging untagged workloads.
 - Do not hardcode pricing numbers unless you have verified them in the current turn.
 - When quoting numbers, include the verification date and the public source you checked.
 - For estimates and comparisons, separate storage, compute, and operational overhead. A narrow price lookup needs only the relevant verified rate and conditions.
 - Map workload shape to cost shape before comparing vendors or plans.
 - Treat many pricing questions as risk, predictability, or procurement questions rather than purely technical ones.
-- Verify plan-sensitive entitlements such as Flight scheduling/runtime limits, custom roles, table-level security, regions, and embedded features in the current turn; do not infer them from an older release note.
+- Verify plan-sensitive entitlements such as Flight sizes and scheduling/runtime limits, custom roles, table-level security, secure views, regions, and embedded features in the current turn; do not infer them from an older release note.
+- Price Flights and AI functions as their own lines. Flights bill per run-hour by size (`F4`, `F16`, `F32`), and the SQL a Flight sends is Duckling compute. AI functions bill in AI Units under the AI session cap: `prompt_jev()` meters input tokens only and is usually the cheapest way to classify at scale; `prompt()` cost depends on the model and `reasoning_effort` (default `'none'`).
+- For procurement through AWS, MotherDuck is available on AWS Marketplace by Private Offer for consolidated AWS billing.
 
 ## Workflow
 
