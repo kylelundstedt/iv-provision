@@ -40,8 +40,7 @@ required=(
   ENTIRE_SHA256_AMD64 ENTIRE_SHA256_ARM64
   CLAUDE_CODE_VERSION CODEX_VERSION UV_VERSION
   CLAUDE_CODE_SHA256_AMD64 CLAUDE_CODE_SHA256_ARM64
-  CODEX_SHA256_AMD64 CODEX_SHA256_ARM64
-  CODEX_CODE_MODE_HOST_SHA256_AMD64 CODEX_CODE_MODE_HOST_SHA256_ARM64
+  CODEX_PACKAGE_SHA256_AMD64 CODEX_PACKAGE_SHA256_ARM64
   UV_SHA256_AMD64 UV_SHA256_ARM64
 )
 
@@ -195,6 +194,25 @@ probe_out=$(
   echo "PATH-wide version probe wrong: expected '2.1.220 2.1.222', got '$probe_out'" >&2
   exit 1
 }
+
+# Codex must be a release package (4.2.1): ~/.local/bin/codex resolving into a
+# tree with codex-package.json counts; a bare binary does not.
+(
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  eval "$(sed -n "/^codex_is_package()/,/^}/p" "$script")"
+  HOME=$tmp/home
+  mkdir -p "$HOME/.local/bin" "$tmp/pkg/bin"
+  printf '#!/bin/sh\n' > "$HOME/.local/bin/codex"
+  chmod +x "$HOME/.local/bin/codex"
+  ! codex_is_package || { echo "codex_is_package: bare binary must not count" >&2; exit 1; }
+  printf '#!/bin/sh\n' > "$tmp/pkg/bin/codex"
+  chmod +x "$tmp/pkg/bin/codex"
+  ln -sfn "$tmp/pkg/bin/codex" "$HOME/.local/bin/codex"
+  ! codex_is_package || { echo "codex_is_package: missing manifest must not count" >&2; exit 1; }
+  echo '{}' > "$tmp/pkg/codex-package.json"
+  codex_is_package || { echo "codex_is_package: package link must count" >&2; exit 1; }
+)
 
 # Platform detection and image provenance (iv-infra D11). Behavioural, against
 # fake roots: exe.dev wins when /exe.dev exists; otherwise /etc/iv/platform;
