@@ -306,7 +306,26 @@ in the development platform (private iv-infra notes).
 
 ## Apple tailnet enrollment
 
-The Apple executor and management plane cooperate in this sequence:
+**Implemented (4.1.0):** there is no exe.dev `api-tailscale` integration on a
+Mac, so the operator or executor mints one single-use, pre-approved,
+non-ephemeral `tag:dev` auth key and drops it in the machine at
+`/run/iv/tailnet.key` (root, 0600). `provision-iv.sh` joins with
+`tailscale up --ssh --accept-dns --accept-routes --hostname=$(hostname)
+--auth-key=file:/run/iv/tailnet.key` and deletes the file; it also deletes a
+leftover file on an already-joined machine. The key is never on a command line,
+and `/run` does not survive a reboot. Without a key file (and without the
+integration) provisioning reports "not joined" and carries on.
+
+The executor also writes `/etc/iv/platform` (`apple`) and `/etc/iv/image.conf`
+(the base image's OCI labels in exe.dev's `image.conf` shape, plus the index
+`Digest`). `provision-iv.sh` records `platform=` in the lock and reads the
+base-image provenance from `/exe.dev/etc/image.conf` or, failing that,
+`/etc/iv/image.conf`; `smoke-provision.sh` requires an Apple lock to name its
+base image and digest.
+
+A later design may replace the key file with user-approved enrollment through
+Aperture; the original sketch follows. In it, the Apple executor and management
+plane cooperate in this sequence:
 
 ```text
 create-dev-vm
