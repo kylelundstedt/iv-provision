@@ -20,7 +20,10 @@ license: MIT
 - Authenticate with `Authorization: Bearer ${MOTHERDUCK_ADMIN_TOKEN}` and keep admin read-write tokens in backend-managed secrets.
 - Never use read-scaling tokens for REST API administration.
 - Prefer read-before-write flows for configuration changes so the current account, service account, Duckling config, or Dive metadata is known before mutation.
-- Treat `POST /v1/users` as service-account creation unless current docs explicitly broaden the API.
+- Treat `POST /v1/users` as service-account creation unless current docs explicitly broaden the API. `GET /v1/users` lists every user and service account in the org; filter with `is_service_account` and `is_deprovisioned` and page with `limit`/`offset`. Use it for access reviews and to find a service account before creating a duplicate.
+- Service accounts and access tokens accept an optional, searchable description. Set one that names the workload and owner; check the current API spec for the field name.
+- For the Terraform resources, state rules, and setup archetypes, read `references/ACCESS_CONTROL_SETUPS.md` in `motherduck-security-governance`.
+- For repeatable provisioning (environments, partner or per-customer setups), prefer the Terraform provider `motherduckdb/motherduck` over scripted REST calls. It authenticates with `MOTHERDUCK_TOKEN`, plus `MOTHERDUCK_ADMIN_TOKEN` for service accounts, tokens, and Duckling configuration.
 - Assume active-account, Duckling configuration, service-account creation, service-account token creation, and Dive embed-session endpoints require an organization admin bearer token unless current docs say otherwise.
 - Never expose generated access tokens in logs, browser code, client bundles, or committed files.
 - Confirm destructive deletes with the user. Deleting a user permanently deletes that user and all of their data.
@@ -35,7 +38,7 @@ license: MIT
 4. For Duckling config changes, read the current config first, then update both `read_write` and `read_scaling` because the `PUT` payload requires both.
 5. Preserve response fields that are only returned once, especially newly created token strings and embed session strings.
 6. Surface API errors by status and response body; do not hide `400`, `401`, `403`, `404`, or `500` responses behind success-shaped fallbacks.
-7. When the MotherDuck MCP server is connected, prefer its admin tools over raw HTTP. Call `get_user_admin_guide` first, or read the MCP column in `references/REST_API_GUIDE.md`.
+7. If the connected MotherDuck MCP server lists user-admin tools (such as `create_service_account`), prefer them over raw HTTP and call `get_user_admin_guide` first when it is listed. Many MCP setups do not expose them; then use the REST API directly. The MCP column in `references/REST_API_GUIDE.md` maps the names.
 
 For answer, review, or planning requests, inspect and report without mutating the control plane. For create or update requests, perform the requested in-scope operation and verify the response; retain confirmation for destructive deletes or broader administrative changes.
 

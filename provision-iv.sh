@@ -9,7 +9,6 @@ set -euo pipefail
 DUCKDB_VERSION=1.5.3
 TIGRIS_VERSION=3.6.1
 RCLONE_VERSION=1.74.3
-HERDR_VERSION=0.7.4
 AGENTSVIEW_VERSION=0.43.0
 TAILCAT_VERSION=0.6.0
 # Public fleet sync token for the AgentsView source daemon. Not a secret: the
@@ -55,10 +54,6 @@ TIGRIS_SHA256_AMD64=3038796d9a6ef9f9c0fdfdc7846d516d88b8775a2b34110d9d5813a4b7da
 TIGRIS_SHA256_ARM64=38a4ca3e94e09c22fca08896f12ec8abf5ead731dd7fc07d56e9d3c98b5be4ba
 RCLONE_SHA256_AMD64=dbee7ccd7a5d617e4ed4cd4555c16669b511abfe8d31164f61be35ac9e999bd2
 RCLONE_SHA256_ARM64=8f8d47446e061f80c3256659fe8e21f56d72d96aaefe1275d088ea5eb6b42aa7
-# herdr publishes no checksum files — these are sha256sums of the release
-# assets, computed locally at pin time. Version bumps must recompute them.
-HERDR_SHA256_X86_64=bc0fc02d4ba500f9cac2353a43e67fe036785ecca6eb55378e050fac3c103059
-HERDR_SHA256_AARCH64=544e0002de42806d1ab64ccdef3a7e7414f24717b0b6b022bc9e57d2eefd26a2
 AGENTSVIEW_SHA256_AMD64=4520c6698772d2db7220212abf58d7d58c0966d7435f0a5ab134371f874df6d9
 AGENTSVIEW_SHA256_ARM64=3c4141bc1356058246336ea8b49a2c846f3050e9a199aa8f732c8815c2dd4e50
 # From tailcat's release checksums.txt.
@@ -167,8 +162,7 @@ case "$DPKG_ARCH" in
 esac
 
 case "$UNAME_ARCH" in
-  x86_64) HERDR_SHA256=$HERDR_SHA256_X86_64 ;;
-  aarch64) HERDR_SHA256=$HERDR_SHA256_AARCH64 ;;
+  x86_64 | aarch64) ;;
   *) echo "provision-iv: unsupported uname architecture: $UNAME_ARCH" >&2; exit 1 ;;
 esac
 
@@ -256,7 +250,7 @@ duckdb_version() { /usr/local/bin/duckdb --version 2>/dev/null | awk '{sub(/^v/,
 aws_version() { /usr/local/bin/aws --version 2>&1 | sed -nE 's#aws-cli/([^ ]+).*#\1#p' || true; }
 tigris_version() { /usr/local/bin/tigris --version 2>/dev/null | head -1 | sed 's/^v//' || true; }
 rclone_version() { /usr/local/bin/rclone version 2>/dev/null | sed -nE '1s/^rclone v?//p' || true; }
-herdr_version() { /usr/local/bin/herdr --version 2>/dev/null | awk '{print $2}' || true; }
+rex_version() { rex version 2>/dev/null | awk 'NR == 1 {print $2}' || true; }
 agentsview_version() { /usr/local/bin/agentsview version --format json 2>/dev/null | jq -r '.version' | sed 's/^v//' || true; }
 tailcat_version() { /usr/local/bin/tailcat --version 2>/dev/null | sed 's/^v//' || true; }
 shelley_info() { /usr/local/bin/shelley version 2>/dev/null || true; }
@@ -392,17 +386,14 @@ install_tigris() {
 # had ~/.config/rclone/rclone.conf. tigris stays a default install — 18 vendored
 # agent skills depend on it.
 
-# herdr releases bare binaries named with uname-style arch (x86_64/aarch64)
-install_herdr() {
-  local actual
-  actual=$(herdr_version)
-  echo "== herdr $HERDR_VERSION ($UNAME_ARCH; installed: ${actual:-missing}) =="
-  [[ $actual == "$HERDR_VERSION" ]] && return
-  download_verified \
-    "https://github.com/ogulcancelik/herdr/releases/download/v${HERDR_VERSION}/herdr-linux-${UNAME_ARCH}" \
-    "$HERDR_SHA256" "$TMP/herdr"
-  sudo install -m 0755 "$TMP/herdr" /usr/local/bin/herdr
-  [[ $(herdr_version) == "$HERDR_VERSION" ]]
+# herdr was part of the IV layer until 4.2.0; Rex replaced it (2026-10-27).
+# Remove the binary provisioning installed. Running herdr processes keep the
+# unlinked binary until they exit; a herdr installed anywhere else is the user's.
+# Its vendored skill is pruned with the other dropped team skills.
+remove_herdr() {
+  [[ -e /usr/local/bin/herdr ]] || return 0
+  echo "== herdr (dropped from the IV layer in 4.2.0; removing /usr/local/bin/herdr) =="
+  sudo rm -f /usr/local/bin/herdr
 }
 
 install_agentsview() {
@@ -1020,7 +1011,7 @@ install_entire_plugin
 install_entire_agentsview_adapter
 install_duckdb
 install_tigris
-install_herdr
+remove_herdr
 install_agentsview
 install_shelley
 install_apex
@@ -1261,6 +1252,20 @@ while IFS= read -r name; do
 done < "$TMP/team-skills.list"
 install -m 0644 "$TMP/team-skills.list" "$TEAM_SKILLS"
 
+echo "== Rex agent setup =="
+# Rex is installed per VM (beta token), not by this script. Where it is, install
+# its skill stub and session-start hook for Claude Code and Codex: the stub
+# defers to the installed rex CLI, so the guide always matches the version, and
+# the hook tells each agent which Rex session and pane it runs in. Safe to
+# re-run; the settings merge above keeps hooks it did not write. Never start a
+# server from here (--autostart=false).
+if command -v rex >/dev/null 2>&1; then
+  rex skill setup --agent claude --agent codex --autostart=false \
+    || echo "  [!] rex skill setup failed" >&2
+else
+  echo "  rex not installed; skipping"
+fi
+
 echo "== ssh config (VM-to-VM short names) =="
 mkdir -p "$HOME/.ssh"
 chmod 700 "$HOME/.ssh"
@@ -1401,7 +1406,7 @@ IMAGE_CONF=$(iv_image_conf)
   echo "aws_cli_version=$(aws_version)"
   echo "tigris_version=$(tigris_version)"
   echo "rclone_version=$(rclone_version)"
-  echo "herdr_version=$(herdr_version)"
+  echo "rex_version=$(rex_version)"
   echo "agentsview_version=$(agentsview_version)"
   echo "tailcat_version=$(tailcat_version)"
   echo "apex_version=$(apex_version)"

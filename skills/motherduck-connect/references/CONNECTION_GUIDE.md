@@ -14,7 +14,7 @@ This file picks the **connection method** (PG endpoint, native DuckDB API, pg_du
 | Steps 1-3 | Token env var, PG endpoint connection examples, verification |
 | Native DuckDB API Alternative | `md:` connections, watermarking, Python/Node/JDBC examples |
 | Authentication | Token types, service tokens, token best practices |
-| Read Scaling and Session Affinity | `session_hint`, `access_mode`, replica freshness |
+| Read Scaling and Session Affinity | `session_name`, `access_mode`, replica freshness |
 | Attach Modes | Workspace vs single mode |
 | Key Rules / Common Mistakes | PG endpoint constraints and failure patterns |
 | PG Endpoint Limitations vs Native DuckDB API | Capability comparison table |
@@ -179,7 +179,7 @@ Use `duckdb.connect("md:")` for workspace-level operations such as:
 
 Use `duckdb.connect("md:my_database")` when the workload is scoped to one database.
 
-When a use-case skill emits a native DuckDB connection, watermark it with `custom_user_agent=agent-skills/2.6.0(harness-<harness>;llm-<llm>)`. If metadata values are missing, use `harness-unknown` and `llm-unknown`.
+When a use-case skill emits a native DuckDB connection, watermark it with `custom_user_agent=agent-skills/3.0.0(harness-<harness>;llm-<llm>)`. If metadata values are missing, use `harness-unknown` and `llm-unknown`.
 
 ### Python
 
@@ -187,7 +187,7 @@ When a use-case skill emits a native DuckDB connection, watermark it with `custo
 import duckdb
 import os
 
-USE_CASE_USER_AGENT = "agent-skills/2.6.0(harness-<harness>;llm-<llm>)"
+USE_CASE_USER_AGENT = "agent-skills/3.0.0(harness-<harness>;llm-<llm>)"
 
 # Default: token picked up from the MOTHERDUCK_TOKEN env var
 conn = duckdb.connect(
@@ -213,7 +213,7 @@ Install: `pip install duckdb`
 ```javascript
 import { DuckDBInstance } from "@duckdb/node-api";
 
-const userAgent = "agent-skills/2.6.0(harness-<harness>;llm-<llm>)";
+const userAgent = "agent-skills/3.0.0(harness-<harness>;llm-<llm>)";
 const instance = await DuckDBInstance.create(
   `md:my_database?attach_mode=single&custom_user_agent=${userAgent}`,
   {
@@ -231,7 +231,7 @@ Install: `npm install @duckdb/node-api`
 ### JDBC (Native DuckDB)
 
 ```text
-jdbc:duckdb:md:my_database?motherduck_token=<MOTHERDUCK_TOKEN>&custom_user_agent=agent-skills/2.6.0(harness-<harness>;llm-<llm>)
+jdbc:duckdb:md:my_database?motherduck_token=<MOTHERDUCK_TOKEN>&custom_user_agent=agent-skills/3.0.0(harness-<harness>;llm-<llm>)
 ```
 
 Requires the DuckDB JDBC driver, not the PostgreSQL driver.
@@ -269,7 +269,7 @@ Use read scaling for high-concurrency read-only workloads on the same account.
 
 - Read scaling replicas are eventually consistent.
 - Default read-scaling pool size is 4 replicas and can be increased up to 16 as a soft limit.
-- Use a stable `session_hint` per end user, session, or tenant-facing request path.
+- Use a stable `session_name` per end user, session, or tenant-facing request path. Connections with the same `session_name` on a read-scaling token go to the same replica. `session_hint` is the deprecated older name; replace it when editing existing code. The Dive embed-session REST API still takes `session_hint`.
 - Prefer `access_mode=read_only` on read-only serving connections.
 - Use `dbinstance_inactivity_ttl` where supported to help preserve session affinity across short connection gaps.
 - If the workflow needs stricter freshness after a write, use `CREATE SNAPSHOT` on the writer and `REFRESH DATABASE` on readers.
@@ -281,9 +281,9 @@ import duckdb
 import os
 
 conn = duckdb.connect(
-    "md:my_database?session_hint=user-123&access_mode=read_only"
+    "md:my_database?session_name=user-123&access_mode=read_only"
     "&dbinstance_inactivity_ttl=300"
-    "&custom_user_agent=agent-skills/2.6.0(harness-<harness>;llm-<llm>)",
+    "&custom_user_agent=agent-skills/3.0.0(harness-<harness>;llm-<llm>)",
     config={
         "motherduck_token": os.environ["MOTHERDUCK_READ_SCALING_TOKEN"],
     },
@@ -296,9 +296,9 @@ conn = duckdb.connect(
 import { DuckDBInstance } from "@duckdb/node-api";
 
 const db = await DuckDBInstance.create(
-  "md:my_database?session_hint=user-123&access_mode=read_only"
+  "md:my_database?session_name=user-123&access_mode=read_only"
   + "&dbinstance_inactivity_ttl=300"
-  + "&custom_user_agent=agent-skills/2.6.0(harness-<harness>;llm-<llm>)",
+  + "&custom_user_agent=agent-skills/3.0.0(harness-<harness>;llm-<llm>)",
   {
     motherduck_token: process.env.MOTHERDUCK_READ_SCALING_TOKEN,
   }
@@ -395,9 +395,9 @@ Use the native DuckDB API for hybrid queries that reference local files.
 
 Add pooling only when a single connection is no longer enough.
 
-### Skipping `session_hint` on Read Scaling
+### Skipping `session_name` on Read Scaling
 
-Without a stable `session_hint`, requests from the same user can bounce between replicas and lose cache affinity.
+Without a stable `session_name`, requests from the same user can bounce between replicas and lose cache affinity.
 
 ## PG Endpoint Limitations vs Native DuckDB API
 

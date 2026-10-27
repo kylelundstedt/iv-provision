@@ -1,6 +1,6 @@
 ---
 name: motherduck-build-data-pipeline
-description: Build ingestion-to-serving pipelines on MotherDuck, including stage boundaries, transformations, and publication.
+description: Build ingestion-to-serving pipelines on MotherDuck, including stage boundaries, transformations, and publication. Use for any recurring ingestion from an API, SaaS app, or database into MotherDuck.
 license: MIT
 ---
 
@@ -17,18 +17,19 @@ Resolve the target from the request or active context. Ask only if ambiguity mat
 - batch over streaming
 - raw landing before curation
 - explicit raw -> staging -> analytics boundaries
-- bulk ingest paths over row-by-row writes
+- bulk ingest paths over row-by-row writes: stage files and load with `read_parquet`/`read_json_auto` or one `INSERT ... SELECT`; never `executemany()` or per-row `INSERT` loops against MotherDuck
 - idempotent stage rebuilds or append contracts before scheduled automation
 - verify the MotherDuck-supported DuckDB client version before recommending upstream-only write, checkpoint, or lakehouse features
 - native MotherDuck storage unless DuckLake is explicitly required
 - MotherDuck CLI for Flight source and large file-shaped output when the agent has a shell; MCP for chat-only operation
 - a `flights` Guide for reusable scheduling, naming, secret, and ingestion conventions when the organization has them
+- Flights sized to their Python work (`F4` when the job mostly sends SQL) and instrumented for the Flight Explainer so each run shows step status and the failing step
+- AI enrichment (classification with `prompt_jev()`, extraction with `prompt()`) as an incremental transform step that writes results to a table, never recomputed at read time
 
 ## Workflow
 
-1. Inspect the available MotherDuck server or supplied source and target context.
-2. Inspect the current workspace and target data model.
-3. Define raw, staging, and analytics boundaries.
+1. Inspect the available MotherDuck server or supplied source and target context, including the current target data model.
+2. Define raw, staging, and analytics boundaries.
 4. Ingest raw data.
 5. Deduplicate, type, and promote into staging.
 6. Materialize analytics-ready outputs.
@@ -37,7 +38,7 @@ Resolve the target from the request or active context. Ask only if ambiguity mat
 
 Match execution to the request: answer, review, or planning work returns the requested pipeline artifacts; build or change work creates the requested in-scope files and warehouse objects and validates them. Ask before destructive actions, unrelated external writes, or a material expansion of scope.
 
-When this skill produces a native DuckDB (`md:`) connection, watermark it with `custom_user_agent=agent-skills/2.6.0(harness-<harness>;llm-<llm>)`. If metadata is missing, fall back to `harness-unknown` and `llm-unknown`.
+When this skill produces a native DuckDB (`md:`) connection, watermark it with `custom_user_agent=agent-skills/3.0.0(harness-<harness>;llm-<llm>)`. If metadata is missing, fall back to `harness-unknown` and `llm-unknown`.
 
 ## Output
 
@@ -57,7 +58,6 @@ Read only the sections relevant to the task; these are guidance, not a mandatory
 
 - `references/dlt-dbt-motherduck-project/` -- fully runnable MotherDuck reference project using `dlt`, `dbt-duckdb`, and validation queries
 - `references/PIPELINE_IMPLEMENTATION_GUIDE.md` -- stage design, transformation sequencing, and ingestion-to-serving examples
-- `../motherduck-load-data/references/INGESTION_PATTERNS.md` -- lower-level ingestion patterns
 
 ## Examples
 
@@ -76,3 +76,4 @@ Load related skills only for missing capabilities; reuse established context.
 - `motherduck-query` -- write transformations and validations
 - `motherduck-share-data` -- publish curated outputs
 - `motherduck-ducklake` -- only when open-table-format storage is a real requirement
+- `motherduck-create-flight` -- schedule and run the pipeline on MotherDuck compute

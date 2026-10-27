@@ -20,7 +20,10 @@ Resolve the target from the request or active context. Ask only if ambiguity mat
 - standard ownership for metric changes
 - lightweight metric definitions and owners before inviting more users
 - a short root orientation Guide plus shallow domain Guides for definitions that agents cannot infer from schema
-- restricted Shares granted to roles; use include patterns for table/view subsets and separate Shares for different audiences
+- team access as custom roles that inherit `explorer` or `builder`, with share grants to the role (archetypes 4 and 5 in `motherduck-security-governance`)
+- restricted Shares granted to roles; use include patterns for table/view subsets and secure views (keyed on `current_email()` or `is_role_in_session()`) for per-team rows, hidden columns, or masked values, instead of one Share per audience
+- Dives as the consumption surface, with the Dive's AI Chat (Agent Chat) for follow-up questions on a governed Dive; Admins can turn it off on the AI Features settings page
+- roles, grants, and Shares managed as code with the Terraform provider once the rollout pattern is stable
 
 ## Workflow
 
@@ -35,7 +38,7 @@ Resolve the target from the request or active context. Ask only if ambiguity mat
 
 Match execution to the request: answer, review, or planning work returns the requested rollout artifacts; build or change work creates the requested in-scope dataset, Dive, or share and validates it. Ask before broader access grants, destructive changes, or external writes not already authorized.
 
-When this skill produces a native DuckDB (`md:`) connection, watermark it with `custom_user_agent=agent-skills/2.6.0(harness-<harness>;llm-<llm>)`. If metadata is missing, fall back to `harness-unknown` and `llm-unknown`.
+When this skill produces a native DuckDB (`md:`) connection, watermark it with `custom_user_agent=agent-skills/3.0.0(harness-<harness>;llm-<llm>)`. If metadata is missing, fall back to `harness-unknown` and `llm-unknown`.
 
 ## Output
 
@@ -72,3 +75,4 @@ Load related skills only for missing capabilities; reuse established context.
 - `motherduck-create-dive` -- build the first shareable answer surface
 - `motherduck-manage-guides` -- preserve governed metric and join context for agents
 - `motherduck-share-data` -- publish table/view subsets and role-granted access
+- `motherduck-security-governance` -- design roles, grants, and secure-view policy

@@ -1,6 +1,6 @@
 ---
 name: motherduck-partner-delivery
-description: Standardize MotherDuck delivery across client engagements with reusable provisioning, isolation, and handoff patterns.
+description: Standardize MotherDuck delivery for consultancies and agencies across client engagements with reusable provisioning, isolation, and handoff patterns.
 license: MIT
 ---
 
@@ -19,7 +19,9 @@ Resolve the target from the request or active context. Ask only if ambiguity mat
 - shared architecture, client-specific schema
 - explicit sharing and revocation per client
 - versioned templates for provisioning, validation, handoff, and exception tracking
-- role-granted restricted Shares with per-audience include patterns where governed table-level delivery fits
+- per-client identities and isolation following archetype 7 in `motherduck-security-governance` (`references/ACCESS_CONTROL_SETUPS.md`)
+- per-client provisioning as Terraform (`motherduckdb/motherduck`): databases, shares and grants, roles, secrets, and service accounts with descriptions that name the client
+- role-granted restricted Shares with per-audience include patterns where governed table-level delivery fits, plus secure views when a client's audiences need row, column, or masking rules
 - a reusable Guide topic layout with client-specific referenced definitions and exceptions
 
 ## Workflow
@@ -35,7 +37,7 @@ Resolve the target from the request or active context. Ask only if ambiguity mat
 
 Match execution to the request: answer, review, or planning work returns the requested delivery artifacts; build or change work creates the requested in-scope templates or client assets and validates them. Ask before provisioning additional client environments, destructive changes, or external writes not already authorized.
 
-When this skill produces a native DuckDB (`md:`) connection, watermark it with `custom_user_agent=agent-skills/2.6.0(harness-<harness>;llm-<llm>)`. If metadata is missing, fall back to `harness-unknown` and `llm-unknown`.
+When this skill produces a native DuckDB (`md:`) connection, watermark it with `custom_user_agent=agent-skills/3.0.0(harness-<harness>;llm-<llm>)`. If metadata is missing, fall back to `harness-unknown` and `llm-unknown`.
 
 ## Output
 
@@ -71,3 +73,5 @@ Load related skills only for missing capabilities; reuse established context.
 - `motherduck-query` -- validate core metrics and data contracts
 - `motherduck-share-data` -- publish governed share boundaries
 - `motherduck-create-dive` -- create repeatable client-facing answer surfaces when needed
+- `motherduck-rest-api` -- provision per-client service accounts and tokens
+- `motherduck-security-governance` -- review per-client isolation and grants

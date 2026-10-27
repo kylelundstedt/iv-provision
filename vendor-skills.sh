@@ -69,6 +69,19 @@ while read -u 9 -r layer method args; do
   esac
 done 9< <(manifest_rows "$SKILLS_MANIFEST")
 
+# archil-guide tells agents to sign up for Archil as themselves via AgentID.
+# Agents here do not create third-party accounts on their own (Kyle,
+# 2026-10-27), so drop that paragraph, and stop if any mention survives so a
+# reworded version gets read rather than shipped.
+archil="$HOME/.agents/skills/archil-guide/SKILL.md"
+if [[ -f $archil ]]; then
+  sed -i.bak '/^\*\*If you are an AI agent,\*\*/,/^$/d' "$archil" && rm -f "$archil.bak"
+  if grep -qi 'agentid' "$archil"; then
+    echo "vendor-skills: archil-guide still mentions AgentID; review it" >&2
+    exit 1
+  fi
+fi
+
 # Replace the vendored snapshot with the freshly resolved trees.
 rm -rf "$OUT"
 mkdir -p "$OUT"

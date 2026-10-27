@@ -10,7 +10,8 @@ exeuntu/
 # 16 KB SKILL.md. The exclusion outlived its reason and quietly broke the skill --
 # skills.manifest lists herdr as a `team` row, but nothing under skills/herdr was
 # ever committed, so provisioning shipped 36 skills where the manifest asked for 37
-# and no VM has ever had it. Removed 2026-08-18.
+# and no VM has ever had it. Removed 2026-08-18. herdr itself left the fleet in
+# 4.2.0 (2026-10-27; Rex replaced it).
 skills/mviz/*.pdf
 skills/mviz/*.png
 # generated/local output

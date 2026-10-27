@@ -243,7 +243,7 @@ and this script continuing to carry the volatile, version-pinned tools. See
 
 | File               | Role                                                                                                                                                                                                                                                    |
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `provision-iv.sh`  | Provisions the IV layer onto the IV base image (tailscale, uv, claude, codex, Entire + plugins, DuckDB, Apex, tailcat, tigris/rclone, herdr, AgentsView, doc-site tools, agent config, skills); writes `~/iv-provision.lock`.                           |
+| `provision-iv.sh`  | Provisions the IV layer onto the IV base image (tailscale, uv, claude, codex, Entire + plugins, DuckDB, Apex, tailcat, tigris/rclone, AgentsView, doc-site tools, agent config, skills); writes `~/iv-provision.lock`.                                  |
 | `vendor-skills.sh` | Refreshes the vendored skills snapshot in `skills/` (needs node/npx).                                                                                                                                                                                   |
 | `skills/`          | Vendored, pinned team skills — committed to the repo so they are frozen.                                                                                                                                                                                |
 | `bin/`             | `render-site` + `provision-docsite` + `gen-llms-txt` + `install-cloud-cli` (on-demand aws/azure/gcloud) — installed onto PATH.                                                                                                                          |
@@ -260,10 +260,10 @@ The pinned artifact is the git commit or release tag of this repo: check out a
 specific revision on the VM, run `provision-iv.sh`, and get the same IV layer on
 that architecture.
 
-- DuckDB, Apex, AWS CLI, Tigris CLI, rclone, tailcat, herdr, AgentsView, and Shelley
+- DuckDB, Apex, AWS CLI, Tigris CLI, rclone, tailcat, AgentsView, and Shelley
   versions plus per-architecture SHA-256 checksums are pinned inside
-  `provision-iv.sh` (herdr publishes no checksums upstream — its pins are
-  computed locally at pin time).
+  `provision-iv.sh`. Rex is not installed here (per VM, beta token); where it
+  is, provisioning sets up its agent skill and hook and records `rex_version`.
 - The provisioner compares installed versions to the recipe and upgrades or
   repairs mismatches; it does not treat any command on `PATH` as sufficient.
 - Skills are vendored into `skills/` (committed = frozen); `provision-iv.sh`

@@ -24,7 +24,7 @@ For reproducibility, pin by checking out a Git tag/sha of this repo before
 running `provision-iv.sh`. Tool releases and checksums are pinned in the script,
 and team skills are vendored in the repo. `~/iv-provision.lock` records the
 exeuntu image revision, Shelley version, installed
-DuckDB/Apex/AWS/Tigris/rclone/tailcat/herdr versions, skills count, manifest pin, and
+DuckDB/Apex/AWS/Tigris/rclone/tailcat/Rex versions, skills count, manifest pin, and
 provisioning repository SHA.
 
 ## Joining the tailnet (on demand)
@@ -81,8 +81,8 @@ Every provisioned VM gets team agent defaults — no manual setup required:
 - **MCP servers** — MotherDuck and GitHub (work) pre-registered via exe.dev proxy
   (no secrets on the VM)
 - **Skills** — mviz, duckdb-skills, motherduck agent-skills,
-  quarto-authoring, brand-yml, marimo-notebook, marimo-batch, find-skills,
-  archil-guide
+  marimo-notebook, marimo-batch, tailscale, archil-guide; the Rex skill and
+  hook where Rex is installed
 
 Personal dotfiles layer on top. Running your own `install.sh` will overlay
 `AGENTS.md`, add personal MCP servers (github-home, tigris, readwise), and

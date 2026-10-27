@@ -6,8 +6,8 @@ The REST API is not the SQL query path. Use it for organization administration, 
 
 ## MotherDuck MCP
 
-When the MotherDuck MCP server is connected and user-admin tools are enabled, prefer MCP
-admin tools over curl. The server exchanges the caller's credential for a regional SLT and
+When the MotherDuck MCP server is connected and lists user-admin tools, prefer MCP
+admin tools over curl. Check the tool list first; many MCP setups do not expose them. The server exchanges the caller's credential for a regional SLT and
 calls `api.<region>.motherduck.com`, not the global routing host. Call `get_user_admin_guide`
 for the in-session copy of this guide.
 
@@ -48,9 +48,10 @@ Operational rules:
 
 ## Endpoint Summary
 
-| Operation | MCP tool | Method and path | Notes |
+| Operation | MCP tool (only if the server lists it) | Method and path | Notes |
 |---|---|---|---|
 | Load admin guide | `get_user_admin_guide` | — | In-session copy of this guide. |
+| List users | — | `GET /v1/users` | Users and service accounts; filters `is_service_account`, `is_deprovisioned`; `limit` (max 1000) and `offset`; returns `users` and `total_count`. |
 | Create service account | `create_service_account` | `POST /v1/users` | Username unique in org; creates a service account only. |
 | Delete user | `delete_user` | `DELETE /v1/users/{username}` | Destructive; confirm first. |
 | Create token | `create_access_token` | `POST /v1/users/{username}/tokens` | Secret returned once. |
@@ -81,7 +82,19 @@ Username constraints from the runtime validator:
 - unique within the organization
 - case-insensitive for identity
 
-The endpoint path says `/v1/users`, but it creates service accounts, not arbitrary human users or arbitrary-role users. Do not document role updates, service-account impersonation, share attachment routes, or attachment management as public REST API capabilities unless the current public spec exposes them.
+List users and service accounts for an access review:
+
+```bash
+curl -fsS \
+  -H "Authorization: Bearer ${MOTHERDUCK_ADMIN_TOKEN}" \
+  "${MD_API}/v1/users?is_service_account=true&is_deprovisioned=false&limit=100&offset=0"
+```
+
+Each entry includes `username`, `is_service_account`, `is_deprovisioned`, and `roles`. Page until you have read `total_count` entries.
+
+For environments that should be reproducible, manage service accounts, tokens, and Duckling configuration with the Terraform provider instead of one-off calls, and keep Terraform state in an encrypted remote backend because it can hold token values.
+
+`POST /v1/users` creates service accounts, not arbitrary human users or arbitrary-role users. Do not document role updates, service-account impersonation, share attachment routes, or attachment management as public REST API capabilities unless the current public spec exposes them.
 
 Delete a user only after explicit confirmation:
 

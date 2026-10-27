@@ -19,7 +19,6 @@ actual_duckdb=$(/usr/local/bin/duckdb --version | awk '{sub(/^v/, "", $1); print
 actual_aws=$(/usr/local/bin/aws --version 2>&1 | sed -nE 's#aws-cli/([^ ]+).*#\1#p' || true)
 actual_tigris=$(/usr/local/bin/tigris --version | head -1 | sed 's/^v//')
 actual_rclone=$(/usr/local/bin/rclone version 2>/dev/null | sed -nE '1s/^rclone v?//p' || true)
-actual_herdr=$(/usr/local/bin/herdr --version | awk '{print $2}')
 actual_agentsview=$(/usr/local/bin/agentsview version --format json | jq -r '.version' | sed 's/^v//')
 actual_shelley=$(/usr/local/bin/shelley version | jq -r '.version')
 actual_shelley_commit=$(/usr/local/bin/shelley version | jq -r '.commit')
@@ -41,7 +40,6 @@ fi
 if [[ -n $actual_rclone ]]; then
   [[ $actual_rclone == "$(expected_value RCLONE_VERSION)" ]]
 fi
-[[ $actual_herdr == "$(expected_value HERDR_VERSION)" ]]
 [[ $actual_agentsview == "$(expected_value AGENTSVIEW_VERSION)" ]]
 [[ $actual_shelley == "$(expected_value SHELLEY_VERSION)" ]]
 [[ $actual_shelley_commit == "$(expected_value SHELLEY_COMMIT)" ]]
@@ -98,6 +96,15 @@ done
 test -x "$HOME/.agents/skills/agentsview-query/agentsview-mcp.sh"
 
 test -f "$lock"
+# herdr left the IV layer in 4.2.0: provisioning removes its binary.
+[[ ! -e /usr/local/bin/herdr ]]
+# Rex is optional (installed per VM). Where it is, the lock records it and the
+# agents have its skill.
+if command -v rex >/dev/null 2>&1; then
+  grep -qx "rex_version=$(rex version | awk 'NR == 1 {print $2}')" "$lock"
+  rex skill status --autostart=false | grep -A2 '^Claude Code' | grep -qE 'skill +current'
+  rex skill status --autostart=false | grep -A2 '^Codex' | grep -qE 'skill +current'
+fi
 # An Apple container machine's executor writes /etc/iv/platform and
 # /etc/iv/image.conf (iv-infra D11), so its lock must name the base image. exe.dev
 # locks are not held to this: their image.conf is exe.dev's to provide.
@@ -110,7 +117,6 @@ grep -qx "duckdb_version=$actual_duckdb" "$lock"
 grep -qx "aws_cli_version=$actual_aws" "$lock"
 grep -qx "tigris_version=$actual_tigris" "$lock"
 grep -qx "rclone_version=$actual_rclone" "$lock"
-grep -qx "herdr_version=$actual_herdr" "$lock"
 grep -qx "agentsview_version=$actual_agentsview" "$lock"
 grep -qx "shelley_version=$actual_shelley" "$lock"
 grep -qx "shelley_tag=$(expected_value SHELLEY_TAG)" "$lock"

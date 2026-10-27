@@ -77,7 +77,7 @@ ssh <vm>.exe.xyz "git clone https://github.com/kylelundstedt/iv-provision.git ~/
 
 `provision-iv.sh` installs DuckDB, Apex (the Markdown and documentation-site
 renderer), the cloud CLIs (tigris/rclone; aws/azure/gcloud on demand,
-via the `install-cloud-cli` helper), herdr, the
+via the `install-cloud-cli` helper), the
 doc-site tools, the team agent config (AGENTS.md, Claude settings, Codex config, MCP
 servers), and the vendored skills — no node required — and writes
 `~/iv-provision.lock` recording exactly what landed.
