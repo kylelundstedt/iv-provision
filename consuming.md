@@ -38,7 +38,7 @@ over `*.exe.xyz` and runs `tailscale up` with a one-use key minted through the
 The join step needs the `api-tailscale` integration, which reaches a VM through
 the **`tailnet` exe.dev tag** — `ssh exe.dev new --name=<vm> --tag=tailnet`, or
 `ssh exe.dev tag <vm> tailnet` for an existing one. Per-VM attachment still works
-for a one-off. See iv-infra `tailnet.md` for the full flow and why the tag grants nothing
+for a one-off. See iv-infra `tailscale/tailnet.md` for the full flow and why the tag grants nothing
 else.
 
 ## Upgrading to a new revision
@@ -50,7 +50,7 @@ skills, agent configuration, and `~/iv-provision.lock`.
 
 The `upgrade-vm` skill also documents the exceptional destroy/recreate path for
 cases that genuinely require a fresh disk or newer exe.dev-managed base. That
-path wipes the VM; see iv-infra `tailnet.md`.
+path wipes the VM; see iv-infra `tailscale/tailnet.md`.
 
 ### Documentation ships with the tag
 

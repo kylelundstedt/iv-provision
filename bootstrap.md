@@ -42,7 +42,7 @@ batteries-included box that is not part of the IV fleet.
 ```bash
 # Use the immutable <date>.<run>.<attempt> build ID, from the package page.
 # --tag=tailnet carries the api-tailscale integration that step 2 needs, and
-# survives a later recreate; see iv-infra tailnet.md for why it grants nothing else.
+# survives a later recreate; see iv-infra tailscale/tailnet.md for why it grants nothing else.
 ssh exe.dev new --name=<vm> --tag=tailnet \
   --image=ghcr.io/kylelundstedt/exeslim-dev:<date>.<run>.<attempt>
 ```
@@ -63,7 +63,7 @@ ssh exe.dev integrations attach api-tailscale vm:<vm>   # one-off; detach after
 Either way the grant is the consent signal, and an untagged, unattached VM simply
 stays off the tailnet — provisioning says so and carries on rather than failing.
 Until it joins, a VM is reachable only over the exe.dev edge. The `tailnet` tag
-grants this and nothing else, deliberately; see iv-infra `tailnet.md`.
+grants this and nothing else, deliberately; see iv-infra `tailscale/tailnet.md`.
 
 ## 3. Provision the team software layer
 

@@ -34,7 +34,7 @@ team npx marimo-team/skills -s marimo-notebook marimo-batch
 #
 # NOTE it is the vendor's own skill, so what it teaches is upstream's model, NOT
 # this fleet's. It does not know about `api-tailscale`, the edge-injected
-# credential, or the join path in provision-iv.sh -- iv-infra tailnet.md and the
+# credential, or the join path in provision-iv.sh -- iv-infra tailscale/tailnet.md and the
 # join-tailnet skill remain the authority on those, and this skill's generic
 # `tailscale up --auth-key=` advice is wrong here. Kept adjacent rather than
 # merged for exactly that reason.

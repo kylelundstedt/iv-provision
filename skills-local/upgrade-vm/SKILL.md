@@ -215,7 +215,7 @@ ssh -o ConnectTimeout=30 exe.dev rm <vm>
 Delete the old node before the replacement joins, otherwise the new VM gets a
 `-1` suffix. This workstation-specific path expects the 1Password CLI and the
 Industry Vault account. Mint a short-lived (1h) access token from the Tailscale
-OAuth client — the old static API key is revoked (2026-07); see iv-infra `tailnet.md`
+OAuth client — the old static API key is revoked (2026-07); see iv-infra `tailscale/tailnet.md`
 for the OAuth setup. Credentials are passed through curl config on stdin
 rather than exposed in curl's process arguments:
 
@@ -256,7 +256,7 @@ The exe.dev VM tag `iv` is **not** yet wired to integration attachment (as of
 2026-08-19 only `iv-provision` carries it, and nothing attaches by it), so a new
 VM still needs `api-tailscale` attached explicitly at step 7. Note this `iv` is
 an exe.dev tag — unrelated to Tailscale's `tag:dev`, and not the provisioning
-repository release tag either. See iv-infra `tailnet.md` → "Two tag systems, one word".
+repository release tag either. See iv-infra `tailscale/tailnet.md` → "Two tag systems, one word".
 
 Recreate is also the **only** way to pick up a newer base image — exe.dev fixes
 a VM's image at creation. Take the current immutable build ID from the

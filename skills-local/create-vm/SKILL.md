@@ -225,7 +225,7 @@ This token cannot do it (`integrations attach` is 403 here), so a deployment
 target that needs the tailnet is a two-party creation: this skill runs `new`,
 the mini runs the attach. Prod-lane nodes are minted **non-ephemeral** (exeslim
 2026-09-15), so after that one window the VM never needs the API again; retire
-it by deleting the node (iv-infra `retiring.md` §5).
+it by deleting the node (iv-infra `exe-dev/retiring.md` §5).
 
 ## Pins
 

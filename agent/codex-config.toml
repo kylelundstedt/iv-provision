@@ -1,7 +1,7 @@
 # Codex default model + provider for iv-provision VMs.
 #
 # All Codex traffic goes through the Aperture gateway on the tailnet
-# (iv-infra development-platform.md, "Gateway plane: cloud models"). Aperture is a
+# (iv-infra platform/development-platform.md, "Gateway plane: cloud models"). Aperture is a
 # passthrough here: Codex keeps the user's own ChatGPT login (one-time
 # `codex login --device-auth` per VM) and Aperture authorizes the request by
 # the VM's Tailscale identity, then forwards it to the ChatGPT Codex backend.
