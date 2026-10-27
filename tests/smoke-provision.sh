@@ -98,6 +98,14 @@ done
 test -x "$HOME/.agents/skills/agentsview-query/agentsview-mcp.sh"
 
 test -f "$lock"
+# An Apple container machine's executor writes /etc/iv/platform and
+# /etc/iv/image.conf (iv-infra D11), so its lock must name the base image. exe.dev
+# locks are not held to this: their image.conf is exe.dev's to provide.
+grep -qE '^platform=(exe\.dev|apple|unknown)$' "$lock"
+if grep -qx 'platform=apple' "$lock"; then
+  ! grep -qx 'base_image_title=unknown' "$lock"
+  grep -qE '^base_image_digest=sha256:[0-9a-f]{64}$' "$lock"
+fi
 grep -qx "duckdb_version=$actual_duckdb" "$lock"
 grep -qx "aws_cli_version=$actual_aws" "$lock"
 grep -qx "tigris_version=$actual_tigris" "$lock"

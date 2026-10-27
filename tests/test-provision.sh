@@ -197,6 +197,31 @@ probe_out=$(
   exit 1
 }
 
+# Platform detection and image provenance (iv-infra D11). Behavioural, against
+# fake roots: exe.dev wins when /exe.dev exists; otherwise /etc/iv/platform;
+# otherwise unknown. The image.conf fallback follows the same order.
+(
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  eval "$(sed -n "/^iv_platform()/,/^}/p" "$script")"
+  eval "$(sed -n "/^iv_image_conf()/,/^}/p" "$script")"
+  IV_EXEDEV_DIR=$tmp/exe.dev IV_ETC_DIR=$tmp/etc-iv
+  [[ $(iv_platform) == unknown ]] || { echo "iv_platform: expected unknown" >&2; exit 1; }
+  mkdir -p "$IV_ETC_DIR" && echo apple > "$IV_ETC_DIR/platform"
+  [[ $(iv_platform) == apple ]] || { echo "iv_platform: expected apple" >&2; exit 1; }
+  [[ $(iv_image_conf) == "$IV_ETC_DIR/image.conf" ]] || { echo "iv_image_conf: expected /etc/iv" >&2; exit 1; }
+  mkdir -p "$IV_EXEDEV_DIR/etc" && echo '{}' > "$IV_EXEDEV_DIR/etc/image.conf"
+  [[ $(iv_platform) == exe.dev ]] || { echo "iv_platform: expected exe.dev" >&2; exit 1; }
+  [[ $(iv_image_conf) == "$IV_EXEDEV_DIR/etc/image.conf" ]] || { echo "iv_image_conf: expected /exe.dev" >&2; exit 1; }
+)
+# The key-file join must pass the key by file (never on a command line) and
+# delete it, and the already-joined path must not leave one behind.
+grep -q -- '--auth-key="file:$key_file"' "$script"
+[[ $(grep -c 'sudo rm -f /run/iv/tailnet.key\|sudo rm -f "$key_file"' "$script") -ge 2 ]] || {
+  echo "the tailnet key file must be removed on both join paths" >&2
+  exit 1
+}
+
 # The ssh block must key on tailnet membership, not on a hostname prefix. Fleet
 # names do not share one -- several long-lived tailnet nodes are not matched by
 # `Host iv-* *.ts.net`, so VM-to-VM ssh to them failed
