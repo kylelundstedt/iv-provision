@@ -17,3 +17,12 @@ name = "Aperture"
 base_url = "https://ai.dojo-sun.ts.net/codex"
 wire_api = "responses"
 requires_openai_auth = true
+
+# The local model (Qwen on OMLX), served through the same Aperture
+# gateway's OpenAI-compatible /v1. Aperture holds the upstream key; the VM's
+# Tailscale identity authorizes it. Opt in per session: `codex --profile studio`
+# (~/.codex/studio.config.toml).
+[model_providers.aperture-local]
+name = "Aperture (local models)"
+base_url = "https://ai.dojo-sun.ts.net/v1"
+wire_api = "responses"

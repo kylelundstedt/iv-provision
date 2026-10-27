@@ -379,4 +379,19 @@ codex_base=$(awk -F'"' '/^base_url[[:space:]]*=/ {print $2; exit}' "$repo/agent/
 grep -qx 'model_provider = "aperture"' "$repo/agent/codex-config.toml" || {
   echo "agent/codex-config.toml does not default to the aperture provider" >&2; exit 1; }
 
+# The local model is offered to both clients through the same gateway, and
+# both must name the same model: Claude Code's custom /model row and Codex's
+# `--profile studio`, whose provider is the gateway's /v1.
+local_base=$(awk -F'"' '/^\[model_providers\.aperture-local\]/ {t=1} t && /^base_url[[:space:]]*=/ {print $2; exit}' "$repo/agent/codex-config.toml")
+[[ $local_base == "$claude_base/v1" ]] || {
+  echo "aperture-local base_url '$local_base' != '$claude_base/v1'" >&2; exit 1; }
+grep -qx 'model_provider = "aperture-local"' "$repo/agent/codex-studio.config.toml" || {
+  echo "agent/codex-studio.config.toml does not use the aperture-local provider" >&2; exit 1; }
+studio_model=$(awk -F'"' '/^model[[:space:]]*=/ {print $2; exit}' "$repo/agent/codex-studio.config.toml")
+claude_studio=$(jq -r '.env.ANTHROPIC_CUSTOM_MODEL_OPTION // empty' "$repo/agent/settings.json")
+[[ -n $studio_model && $studio_model == "$claude_studio" ]] || {
+  echo "studio model differs: codex '$studio_model', claude '$claude_studio'" >&2; exit 1; }
+grep -q 'agent/codex-studio.config.toml" "$HOME/.codex/studio.config.toml"' "$repo/provision-iv.sh" || {
+  echo "provision-iv.sh does not install the studio profile" >&2; exit 1; }
+
 printf '%s\n' 'provision script tests passed'

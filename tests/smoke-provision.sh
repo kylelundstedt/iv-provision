@@ -66,6 +66,7 @@ test -x "$HOME/.agents/ssh-guard.sh"
 test -f "$HOME/.agents/AGENTS.md"
 test -f "$HOME/.claude/settings.json"
 test -f "$HOME/.codex/config.toml"
+test -f "$HOME/.codex/studio.config.toml"
 # Codex is a release package (4.2.1): the interactive client's background app
 # server refuses a bare binary. The package carries the Code Mode host in bin/.
 codex_real=$(readlink -f "$HOME/.local/bin/codex")
