@@ -133,6 +133,16 @@ A model error here (e.g. `claude-opus-5[1m]` "may not exist") means the CLI's
 default model is not on Aperture's provider list: the pins are behind the
 gateway. Do not work around it per VM; bump the pins.
 
+From 4.3.0 the local model (Qwen on OMLX) is one step away in both CLIs, through the
+same gateway: Claude Code's `/model` lists **Qwen3.8 27B (local)**, and
+`codex --profile studio` uses it (`~/.codex/studio.config.toml`). Neither is the
+default. Check with:
+
+```bash
+ssh <vm> 'cd /tmp && claude -p "Reply with exactly: ok" --model Qwen3.8-27B-4bit \
+  && codex exec --skip-git-repo-check --profile studio "Reply with exactly: ok"'
+```
+
 ### Do production VMs last
 
 VMs running services others depend on go **last and

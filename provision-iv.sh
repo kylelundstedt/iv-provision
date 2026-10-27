@@ -1207,6 +1207,7 @@ else
   install -m 0644 "$IV_REPO/agent/settings.json" "$HOME/.claude/settings.json"
 fi
 install -m 0644 "$IV_REPO/agent/codex-config.toml" "$HOME/.codex/config.toml"
+install -m 0644 "$IV_REPO/agent/codex-studio.config.toml" "$HOME/.codex/studio.config.toml"
 ln -sfn ../.agents/AGENTS.md "$HOME/.claude/CLAUDE.md"
 ln -sfn ../.agents/AGENTS.md "$HOME/.codex/AGENTS.md"
 

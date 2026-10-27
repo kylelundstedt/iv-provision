@@ -1,0 +1,4 @@
+# Codex profile: the local model (Qwen on OMLX) through Aperture.
+# Start with `codex --profile studio`; installed as ~/.codex/studio.config.toml.
+model_provider = "aperture-local"
+model = "Qwen3.8-27B-4bit"

@@ -1,7 +1,10 @@
 {
   "env": {
     "DISABLE_NON_ESSENTIAL_MODEL_CALLS": "1",
-    "ANTHROPIC_BASE_URL": "https://ai.dojo-sun.ts.net"
+    "ANTHROPIC_BASE_URL": "https://ai.dojo-sun.ts.net",
+    "ANTHROPIC_CUSTOM_MODEL_OPTION": "Qwen3.8-27B-4bit",
+    "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME": "Qwen3.8 27B (local)",
+    "ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION": "Local model, through Aperture"
   },
   "hooks": {
     "PreToolUse": [
