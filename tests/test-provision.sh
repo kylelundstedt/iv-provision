@@ -368,7 +368,7 @@ if ! diff -q <(tail -n +2 "$repo/bin/render-md-site") \
 fi
 
 # Claude Code and Codex must both point at the same Aperture gateway: one
-# endpoint for the whole fleet (iv-infra development-platform.md). A drift between the two
+# endpoint for the whole fleet (iv-infra platform/development-platform.md). A drift between the two
 # files would send one client somewhere else with no error until it is used.
 claude_base=$(jq -r '.env.ANTHROPIC_BASE_URL // empty' "$repo/agent/settings.json")
 codex_base=$(awk -F'"' '/^base_url[[:space:]]*=/ {print $2; exit}' "$repo/agent/codex-config.toml")

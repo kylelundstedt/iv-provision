@@ -642,7 +642,7 @@ install_tailscale() {
 
   # The daemon must be running before `join-tailnet` can authenticate. Enabling
   # it does NOT join the tailnet or touch state: membership stays an explicit
-  # decision (see iv-infra tailnet.md), this only makes the join possible.
+  # decision (see iv-infra tailscale/tailnet.md), this only makes the join possible.
   sudo systemctl enable --now tailscaled
 
   # Ensure Tailscale SSH on a node that is already up. A service VM joined without
@@ -677,7 +677,7 @@ install_tailscale() {
   # from a VM the control plane deliberately attached it to. Least authority means
   # it is normally attached to nothing -- you attach it, provision, and detach.
   # Nothing is baked in, no credential touches the VM, and an unattached VM simply
-  # stays off the tailnet. That satisfies what iv-infra tailnet.md wanted from "on-demand
+  # stays off the tailnet. That satisfies what iv-infra tailscale/tailnet.md wanted from "on-demand
   # join" without making a human hand-run an OAuth dance.
   #
   # This is what the personal dotfiles install.sh has always done. Moving the

@@ -10,7 +10,7 @@ Joins an exe.dev VM to the IV Tailscale tailnet. The VM must have the
 `tailnet` (a standing grant), and on anything internet-facing or prod-lane only
 as a time-boxed per-VM attachment
 (`integrations attach api-tailscale vm:<vm> --for 30m`), never the tag. The
-two-lane contract lives in iv-infra `tailnet.md`.
+two-lane contract lives in iv-infra `tailscale/tailnet.md`.
 
 ## Usage
 
@@ -94,7 +94,7 @@ misread from a screenshot.)
   `ssh exe.dev tag <vm> tailnet`, or per VM for a one-off with
   `ssh exe.dev integrations attach api-tailscale vm:<vm>`. Note `tailnet` here is
   an **exe.dev** tag, unrelated to Tailscale's own `tag:dev`; it never appears in
-  `tailscale status`. See iv-infra `tailnet.md` → "Two tag systems, one word", and confirm
+  `tailscale status`. See iv-infra `tailscale/tailnet.md` → "Two tag systems, one word", and confirm
   attachment off-VM with `ssh exe.dev integrations` — `reflection` shows a VM its
   own integrations but never the attachment rules.
 - `tailscale` itself is installed by `provision-iv.sh` (since 2026-08-18), which
