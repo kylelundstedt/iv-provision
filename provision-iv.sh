@@ -76,11 +76,10 @@ ENTIRE_AGENTSVIEW_SHA256=c75d5459537d208b0ad674f97cd8a1814376f23b2a23a52d3e6fd97
 # uv: from the asset's own .sha256 file.
 CLAUDE_CODE_SHA256_AMD64=6a699c7205d3c5f99e03a21d6b0511366f41c9a7284547b6e0785504ebdb261a
 CLAUDE_CODE_SHA256_ARM64=196b868da6b7c1105c55aa44f3d99c1f7d1325559940924dca92da9e4c6f12a0
-CODEX_SHA256_AMD64=86f268d81b898f3e144c5ecff2ad2fda2c5802e042d6195b72538fe0fa125057
-CODEX_SHA256_ARM64=bf3ca2719f1143b1440fbd85c149379e696c782c50ad7991f8bfcec60b2600c1
-# Code Mode host: a separate release asset, versioned with CODEX_VERSION.
-CODEX_CODE_MODE_HOST_SHA256_AMD64=458239ea45c1fc508d89695f180ab352f2834709a8a46929a4466f4f04399ada
-CODEX_CODE_MODE_HOST_SHA256_ARM64=1395ce9367f8acd280674dff083edf25bf221d908b8351d5bd4f3fdde9181e9a
+# The release's codex-package-<target>.tar.gz (from codex-package_SHA256SUMS):
+# Codex, its Code Mode host, rg, bwrap and codex-package.json in one tree.
+CODEX_PACKAGE_SHA256_AMD64=a676f5722aae0d86cbe3764332f08eab1fdd89dc0a300b3ad4ffbf48611fa3e3
+CODEX_PACKAGE_SHA256_ARM64=53a9ce0b94beb27a63fdeb2f7704d95199e17b3898aa33b60461a1a93ac0d88b
 UV_SHA256_AMD64=f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f
 UV_SHA256_ARM64=4bb69cf95ed13f23713bb7bc09f241896ea0c75b7c557e615a20604b82f9c403
 
@@ -133,8 +132,7 @@ case "$DPKG_ARCH" in
     ENTIRE_SHA256=$ENTIRE_SHA256_AMD64
     CLAUDE_CODE_SHA256=$CLAUDE_CODE_SHA256_AMD64
     CLAUDE_CODE_ASSET_ARCH=x64
-    CODEX_SHA256=$CODEX_SHA256_AMD64
-    CODEX_CODE_MODE_HOST_SHA256=$CODEX_CODE_MODE_HOST_SHA256_AMD64
+    CODEX_PACKAGE_SHA256=$CODEX_PACKAGE_SHA256_AMD64
     CODEX_ASSET_ARCH=x86_64
     UV_SHA256=$UV_SHA256_AMD64
     UV_ASSET_ARCH=x86_64
@@ -152,8 +150,7 @@ case "$DPKG_ARCH" in
     ENTIRE_SHA256=$ENTIRE_SHA256_ARM64
     CLAUDE_CODE_SHA256=$CLAUDE_CODE_SHA256_ARM64
     CLAUDE_CODE_ASSET_ARCH=arm64
-    CODEX_SHA256=$CODEX_SHA256_ARM64
-    CODEX_CODE_MODE_HOST_SHA256=$CODEX_CODE_MODE_HOST_SHA256_ARM64
+    CODEX_PACKAGE_SHA256=$CODEX_PACKAGE_SHA256_ARM64
     CODEX_ASSET_ARCH=aarch64
     UV_SHA256=$UV_SHA256_ARM64
     UV_ASSET_ARCH=aarch64
@@ -958,45 +955,59 @@ install_claude_code() {
   [[ $(claude_code_version) == "$CLAUDE_CODE_VERSION" ]]
 }
 
-# Floor, not an exact version -- see install_claude_code.
-install_codex() {
-  local actual best
-  actual=$(codex_version)
-  best=$(codex_version_highest)
-  echo "== Codex >=$CODEX_VERSION ($CODEX_ASSET_ARCH; installed: ${actual:-missing}) =="
-  if version_at_least "$best" "$CODEX_VERSION"; then
-    [[ $best == "$CODEX_VERSION" ]] || echo "  keeping newer self-updated $best (pin is a floor)"
-    install_codex_code_mode_host
-    return
-  fi
-  # musl build: static, so it does not care what libc the base image ships.
-  download_verified \
-    "https://github.com/openai/codex/releases/download/rust-v${CODEX_VERSION}/codex-${CODEX_ASSET_ARCH}-unknown-linux-musl.tar.gz" \
-    "$CODEX_SHA256" "$TMP/codex.tar.gz"
-  mkdir -p "$TMP/codex" "$HOME/.local/bin"
-  tar -xzf "$TMP/codex.tar.gz" -C "$TMP/codex"
-  install -m 0755 "$TMP/codex/codex-${CODEX_ASSET_ARCH}-unknown-linux-musl" "$HOME/.local/bin/codex"
-  [[ $(codex_version) == "$CODEX_VERSION" ]]
-  install_codex_code_mode_host force
+# Codex installs as a release *package*, in the standalone installer's layout:
+# ~/.codex/packages/standalone/releases/<version>-<target>/ (bin/codex,
+# bin/codex-code-mode-host, codex-path/rg, codex-resources/, codex-package.json),
+# a `current` link, and ~/.local/bin/codex -> current/bin/codex. Since 0.162 the
+# interactive client starts a background app server by default and refuses to
+# when Codex is not a package ("this CLI has no complete local package"); the
+# bare release binary this script used to install broke interactive `codex` on
+# every VM (found 2026-10-27, iv-provision 4.2.1).
+codex_is_package() {
+  local real
+  real=$(readlink -f "$HOME/.local/bin/codex" 2>/dev/null) || return 1
+  [[ -f $(dirname "$(dirname "$real")")/codex-package.json ]]
 }
 
-# Codex >= 0.16x runs Code Mode in a separate `codex-code-mode-host` binary that
-# it looks for next to itself (`code_mode_host` is a stable feature, on by
-# default). Without it Codex warns on every run and Code Mode fails closed.
-# Homebrew's cask ships both binaries; the Linux release splits them into two
-# assets, so install the host from the same pinned release. Reinstalled with
-# every pinned Codex install ("force"); otherwise only when missing, which is
-# the case on a VM whose Codex already met the pin.
-install_codex_code_mode_host() {
-  local host="$HOME/.local/bin/codex-code-mode-host"
-  [[ ${1:-} == force || ! -x $host ]] || return 0
-  echo "  installing codex-code-mode-host $CODEX_VERSION"
+# Floor, not an exact version -- see install_claude_code. A newer self-updated
+# Codex is kept only when ~/.local/bin/codex is a package; a bare binary at any
+# version is replaced by the pinned package.
+install_codex() {
+  local actual best root rel stage
+  actual=$(codex_version)
+  best=$(codex_version_highest)
+  echo "== Codex >=$CODEX_VERSION package ($CODEX_ASSET_ARCH; installed: ${actual:-missing}) =="
+  if version_at_least "$best" "$CODEX_VERSION" && codex_is_package; then
+    [[ $best == "$CODEX_VERSION" ]] || echo "  keeping newer self-updated $best (pin is a floor)"
+    return
+  fi
+  # A newer non-package copy elsewhere on PATH gets shadowed by the pinned
+  # package here: a lower version, but the newer one cannot run interactively.
+  [[ -z $best ]] || codex_is_package || echo "  replacing a non-package Codex ($best) with the pinned package"
+  # musl build: static, so it does not care what libc the base image ships.
   download_verified \
-    "https://github.com/openai/codex/releases/download/rust-v${CODEX_VERSION}/codex-code-mode-host-${CODEX_ASSET_ARCH}-unknown-linux-musl.tar.gz" \
-    "$CODEX_CODE_MODE_HOST_SHA256" "$TMP/codex-code-mode-host.tar.gz"
-  mkdir -p "$TMP/codex-code-mode-host" "$HOME/.local/bin"
-  tar -xzf "$TMP/codex-code-mode-host.tar.gz" -C "$TMP/codex-code-mode-host"
-  install -m 0755 "$TMP/codex-code-mode-host/codex-code-mode-host-${CODEX_ASSET_ARCH}-unknown-linux-musl" "$host"
+    "https://github.com/openai/codex/releases/download/rust-v${CODEX_VERSION}/codex-package-${CODEX_ASSET_ARCH}-unknown-linux-musl.tar.gz" \
+    "$CODEX_PACKAGE_SHA256" "$TMP/codex-package.tar.gz"
+  root="$HOME/.codex/packages/standalone"
+  rel="$root/releases/${CODEX_VERSION}-${CODEX_ASSET_ARCH}-unknown-linux-musl"
+  stage="$root/releases/.staging.$$"
+  rm -rf "$stage"
+  mkdir -p "$stage" "$HOME/.local/bin"
+  tar -xzf "$TMP/codex-package.tar.gz" -C "$stage"
+  [[ -f $stage/codex-package.json && -x $stage/bin/codex ]]
+  # The installer's alias at the package root; Codex's package hashing skips it.
+  ln -sfn bin/codex "$stage/codex"
+  rm -rf "$rel"
+  mv "$stage" "$rel"
+  ln -sfn "$rel" "$root/current"
+  ln -sfn "$root/current/bin/codex" "$HOME/.local/bin/codex"
+  # Before 4.2.1 the Code Mode host was a separate binary next to a bare codex;
+  # the package carries its own in bin/. Remove the old copy (a regular file
+  # this script installed), never a link someone else made.
+  [[ ! -f $HOME/.local/bin/codex-code-mode-host || -L $HOME/.local/bin/codex-code-mode-host ]] \
+    || rm -f "$HOME/.local/bin/codex-code-mode-host"
+  [[ $(codex_version) == "$CODEX_VERSION" ]]
+  codex_is_package
 }
 
 remove_legacy_quarto

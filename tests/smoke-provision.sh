@@ -66,8 +66,12 @@ test -x "$HOME/.agents/ssh-guard.sh"
 test -f "$HOME/.agents/AGENTS.md"
 test -f "$HOME/.claude/settings.json"
 test -f "$HOME/.codex/config.toml"
-# Codex >= 0.16x needs its Code Mode host next to it, or Code Mode fails closed.
-test -x "$HOME/.local/bin/codex-code-mode-host"
+# Codex is a release package (4.2.1): the interactive client's background app
+# server refuses a bare binary. The package carries the Code Mode host in bin/.
+codex_real=$(readlink -f "$HOME/.local/bin/codex")
+codex_pkg=$(dirname "$(dirname "$codex_real")")
+test -f "$codex_pkg/codex-package.json"
+test -x "$codex_pkg/bin/codex-code-mode-host"
 test -f "$HOME/.claude.json"
 test -f "$HOME/.agents/iv-team-skills.list"
 test -f "$HOME/.config/systemd/user/agentsview-source.service"
