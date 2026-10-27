@@ -172,6 +172,34 @@ case "$UNAME_ARCH" in
   *) echo "provision-iv: unsupported uname architecture: $UNAME_ARCH" >&2; exit 1 ;;
 esac
 
+# Where this VM runs: exe.dev | apple | unknown. exe.dev provides /exe.dev; an
+# Apple container machine gets /etc/iv/platform from its executor (iv-infra
+# dev-machine.sh), because the image is shared with exe.dev and cannot know.
+# systemd-detect-virt (`container-other` there) is only a hint: other container
+# runtimes match it too. The roots are overridable for tests only.
+IV_EXEDEV_DIR=${IV_EXEDEV_DIR:-/exe.dev}
+IV_ETC_DIR=${IV_ETC_DIR:-/etc/iv}
+iv_platform() {
+  if [[ -d $IV_EXEDEV_DIR ]]; then
+    echo exe.dev
+  elif [[ -r $IV_ETC_DIR/platform ]]; then
+    head -1 "$IV_ETC_DIR/platform"
+  else
+    echo unknown
+  fi
+}
+
+# The OCI image config with the base image's labels: exe.dev writes it under
+# /exe.dev; on Apple the executor writes the same shape (plus "Digest") from
+# `container image inspect`.
+iv_image_conf() {
+  if [[ -r $IV_EXEDEV_DIR/etc/image.conf ]]; then
+    echo "$IV_EXEDEV_DIR/etc/image.conf"
+  else
+    echo "$IV_ETC_DIR/image.conf"
+  fi
+}
+
 download_verified() {
   local url=$1 sha256=$2 output=$3
   curl -fsSL "$url" -o "$output"
@@ -648,6 +676,9 @@ install_tailscale() {
       echo "Tailscale SSH disabled (RunSSH=$run_ssh); enabling with 'tailscale set --ssh'"
       sudo tailscale set --ssh || true
     fi
+    # Already joined: a key file dropped for this VM is now only a credential
+    # lying around, so remove it (see the key-file join below).
+    sudo rm -f /run/iv/tailnet.key
     return
   fi
 
@@ -669,6 +700,21 @@ install_tailscale() {
   # Set IV_NO_TAILNET=1 to skip even when the integration is attached.
   if [[ ${IV_NO_TAILNET:-0} == 1 ]]; then
     echo "  IV_NO_TAILNET=1; not joining the tailnet"
+    return
+  fi
+
+  # A key file is the join path where there is no exe.dev integration (Apple
+  # container machines, iv-infra D11): an operator or executor mints one
+  # single-use, pre-approved, non-ephemeral tag:dev key and drops it here, root
+  # 0600, under /run so nothing survives a reboot. Same flags as below; the key
+  # never appears on a command line, and the file is deleted whatever happens.
+  local key_file=/run/iv/tailnet.key
+  if sudo test -s "$key_file"; then
+    sudo tailscale up --ssh --accept-dns --accept-routes \
+      --hostname="$(hostname)" --auth-key="file:$key_file" \
+      && echo "  joined the tailnet as $(hostname) from $key_file (Tailscale SSH enabled)" \
+      || echo "  [!] tailscale up with $key_file failed" >&2
+    sudo rm -f "$key_file"
     return
   fi
 
@@ -1328,18 +1374,25 @@ sudo systemctl enable --now iv-apt-upgrade.timer >/dev/null 2>&1 \
 
 echo "== provenance lockfile =="
 LOCK="$HOME/iv-provision.lock"
+IMAGE_CONF=$(iv_image_conf)
 {
   echo "provisioned_utc=$(date -u +%FT%TZ)"
   echo "provision_repo_sha=$(git -C "$IV_REPO" rev-parse HEAD 2>/dev/null || echo unknown)"
   echo "arch=$DPKG_ARCH"
+  echo "platform=$(iv_platform)"
   # These were named exeuntu_* until 2026-08-18, which was actively misleading:
   # IV VMs run ghcr.io/kylelundstedt/exeslim-dev, so the field labelled "exeuntu"
   # had been silently recording an exeslim revision. Record the title and
   # version too, so a lock file says WHICH image, not just which commit.
-  echo "base_image_title=$(jq -r '.Labels["org.opencontainers.image.title"] // "unknown"' /exe.dev/etc/image.conf 2>/dev/null || echo unknown)"
-  echo "base_image_version=$(jq -r '.Labels["org.opencontainers.image.version"] // "unknown"' /exe.dev/etc/image.conf 2>/dev/null || echo unknown)"
-  echo "base_image_revision=$(jq -r '.Labels["org.opencontainers.image.revision"] // "unknown"' /exe.dev/etc/image.conf 2>/dev/null || echo unknown)"
-  echo "base_image_created=$(jq -r '.Labels["org.opencontainers.image.created"] // "unknown"' /exe.dev/etc/image.conf 2>/dev/null || echo unknown)"
+  echo "base_image_title=$(jq -r '.Labels["org.opencontainers.image.title"] // "unknown"' "$IMAGE_CONF" 2>/dev/null || echo unknown)"
+  echo "base_image_version=$(jq -r '.Labels["org.opencontainers.image.version"] // "unknown"' "$IMAGE_CONF" 2>/dev/null || echo unknown)"
+  echo "base_image_revision=$(jq -r '.Labels["org.opencontainers.image.revision"] // "unknown"' "$IMAGE_CONF" 2>/dev/null || echo unknown)"
+  echo "base_image_created=$(jq -r '.Labels["org.opencontainers.image.created"] // "unknown"' "$IMAGE_CONF" 2>/dev/null || echo unknown)"
+  # Apple only: exe.dev's image.conf carries no digest, and the line stays absent
+  # there so exe.dev locks keep their shape.
+  if jq -e '.Digest' "$IMAGE_CONF" >/dev/null 2>&1; then
+    echo "base_image_digest=$(jq -r '.Digest' "$IMAGE_CONF")"
+  fi
   echo "shelley_version=$(shelley_version)"
   echo "shelley_tag=$SHELLEY_TAG"
   echo "shelley_commit=$(shelley_commit)"
