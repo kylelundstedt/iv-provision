@@ -372,7 +372,7 @@ fi
 # files would send one client somewhere else with no error until it is used.
 claude_base=$(jq -r '.env.ANTHROPIC_BASE_URL // empty' "$repo/agent/settings.json")
 codex_base=$(awk -F'"' '/^base_url[[:space:]]*=/ {print $2; exit}' "$repo/agent/codex-config.toml")
-[[ $claude_base == http://ai.dojo-sun.ts.net ]] || {
+[[ $claude_base == https://ai.dojo-sun.ts.net ]] || {
   echo "agent/settings.json ANTHROPIC_BASE_URL is not Aperture: '$claude_base'" >&2; exit 1; }
 [[ $codex_base == "$claude_base/codex" ]] || {
   echo "codex base_url '$codex_base' != '$claude_base/codex'" >&2; exit 1; }
