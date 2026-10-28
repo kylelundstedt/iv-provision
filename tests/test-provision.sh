@@ -394,4 +394,11 @@ claude_studio=$(jq -r '.env.ANTHROPIC_CUSTOM_MODEL_OPTION // empty' "$repo/agent
 grep -q 'agent/codex-studio.config.toml" "$HOME/.codex/studio.config.toml"' "$repo/provision-iv.sh" || {
   echo "provision-iv.sh does not install the studio profile" >&2; exit 1; }
 
+# Apple machines run provisioning from `container machine run`, which sets no
+# USER; under set -u the first "$USER" would abort the run. The script's prelude
+# (up to the first pin) must define it.
+prelude_user=$(env -u USER bash -c "$(sed -n '1,/^DUCKDB_VERSION=/p' "$repo/provision-iv.sh")"$'\n''printf %s "$USER"')
+[[ $prelude_user == "$(id -un)" ]] || {
+  echo "provision-iv.sh prelude leaves USER unset (got '$prelude_user')" >&2; exit 1; }
+
 printf '%s\n' 'provision script tests passed'

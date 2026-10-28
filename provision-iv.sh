@@ -5,6 +5,10 @@
 # checksum-verified; skills and agent configuration are vendored in this repo.
 # It needs no Node runtime. Arch-aware (amd64 + arm64) and safe to re-run.
 set -euo pipefail
+# A shell started by `container machine run` (Apple machines) sets no USER, and
+# set -u would stop the run at the first use.
+: "${USER:=$(id -un)}"
+export USER
 
 DUCKDB_VERSION=1.5.3
 TIGRIS_VERSION=3.6.1
