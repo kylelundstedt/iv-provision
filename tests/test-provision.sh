@@ -214,6 +214,38 @@ probe_out=$(
   codex_is_package || { echo "codex_is_package: package link must count" >&2; exit 1; }
 )
 
+# First provision seeds Codex defaults; an upgrade preserves owner permissions,
+# providers, profile customizations, and stow-managed symlinks byte-for-byte.
+(
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  eval "$(sed -n "/^install_codex_configs()/,/^}/p" "$script")"
+  codex_dir=$tmp/home/.codex
+  IV_REPO=$repo
+  mkdir -p "$codex_dir"
+  install_codex_configs "$codex_dir"
+  cmp "$repo/agent/codex-config.toml" "$codex_dir/config.toml"
+  cmp "$repo/agent/codex-studio.config.toml" "$codex_dir/studio.config.toml"
+  cat > "$tmp/owner.toml" <<'TOML'
+model_provider = "owner-gateway"
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+TOML
+  cp "$tmp/owner.toml" "$codex_dir/config.toml"
+  echo 'model = "owner-model"' > "$tmp/studio.toml"
+  cp "$tmp/studio.toml" "$codex_dir/studio.config.toml"
+  install_codex_configs "$codex_dir"
+  cmp "$tmp/owner.toml" "$codex_dir/config.toml"
+  cmp "$tmp/studio.toml" "$codex_dir/studio.config.toml"
+  rm "$codex_dir/config.toml" "$codex_dir/studio.config.toml"
+  ln -s "$tmp/owner.toml" "$codex_dir/config.toml"
+  ln -s "$tmp/missing-owner-profile.toml" "$codex_dir/studio.config.toml"
+  install_codex_configs "$codex_dir"
+  [[ -L $codex_dir/config.toml && -L $codex_dir/studio.config.toml ]]
+  cmp "$tmp/owner.toml" "$codex_dir/config.toml"
+  [[ ! -e $tmp/missing-owner-profile.toml ]]
+)
+
 # Platform detection and image provenance (iv-infra D11). Behavioural, against
 # fake roots: exe.dev wins when /exe.dev exists; otherwise /etc/iv/platform;
 # otherwise unknown. The image.conf fallback follows the same order.
@@ -391,7 +423,7 @@ studio_model=$(awk -F'"' '/^model[[:space:]]*=/ {print $2; exit}' "$repo/agent/c
 claude_studio=$(jq -r '.env.ANTHROPIC_CUSTOM_MODEL_OPTION // empty' "$repo/agent/settings.json")
 [[ -n $studio_model && $studio_model == "$claude_studio" ]] || {
   echo "studio model differs: codex '$studio_model', claude '$claude_studio'" >&2; exit 1; }
-grep -q 'agent/codex-studio.config.toml" "$HOME/.codex/studio.config.toml"' "$repo/provision-iv.sh" || {
+grep -q '^install_codex_configs "$HOME/.codex"' "$repo/provision-iv.sh" || {
   echo "provision-iv.sh does not install the studio profile" >&2; exit 1; }
 
 # Apple machines run provisioning from `container machine run`, which sets no

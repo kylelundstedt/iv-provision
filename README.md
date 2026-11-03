@@ -49,6 +49,11 @@ self-update path; and records the actual installed version, commit, and hash in
 `~/iv-provision.lock`. OAuth credentials and conversation databases are never
 baked into this repository or copied between VMs.
 
+Codex's `~/.codex/config.toml` and `~/.codex/studio.config.toml` are seeded only
+when absent. Re-provisioning preserves existing files and symlinks, including
+owner-selected permissions and providers. Changes to those settings require an
+explicit owner instruction; agent setup and handoffs do not authorize overrides.
+
 ### Entire (ACR) capture
 
 Provisioning installs the **Entire CLI** (pinned `0.10.1`, checksum-verified) and

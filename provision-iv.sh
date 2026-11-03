@@ -1210,8 +1210,22 @@ if command -v jq >/dev/null 2>&1 && [[ -s $HOME/.claude/settings.json ]] \
 else
   install -m 0644 "$IV_REPO/agent/settings.json" "$HOME/.claude/settings.json"
 fi
-install -m 0644 "$IV_REPO/agent/codex-config.toml" "$HOME/.codex/config.toml"
-install -m 0644 "$IV_REPO/agent/codex-studio.config.toml" "$HOME/.codex/studio.config.toml"
+# Seed Codex defaults on first provision. Existing files (including symlinks)
+# belong to the owner; upgrades must not reset their permissions or providers.
+install_codex_configs() {
+  local codex_dir=$1
+  if [[ ! -e $codex_dir/config.toml && ! -L $codex_dir/config.toml ]]; then
+    install -m 0644 "$IV_REPO/agent/codex-config.toml" "$codex_dir/config.toml"
+  else
+    echo "  preserved owner Codex config.toml"
+  fi
+  if [[ ! -e $codex_dir/studio.config.toml && ! -L $codex_dir/studio.config.toml ]]; then
+    install -m 0644 "$IV_REPO/agent/codex-studio.config.toml" "$codex_dir/studio.config.toml"
+  else
+    echo "  preserved owner Codex studio.config.toml"
+  fi
+}
+install_codex_configs "$HOME/.codex"
 ln -sfn ../.agents/AGENTS.md "$HOME/.claude/CLAUDE.md"
 ln -sfn ../.agents/AGENTS.md "$HOME/.codex/AGENTS.md"
 
