@@ -1,0 +1,179 @@
+#!/usr/bin/env bash
+# IV remote-access configuration only; no package or architecture installation logic.
+# --plan is read-only; only `rex version` is invoked, never an auto-starting client.
+set -euo pipefail
+rex_bundle=$(cd "$(dirname "${BASH_SOURCE[0]}")/../provisioning/rex" && pwd)
+rex_root= # Internal fixture prefix for sourced offline tests, not an option/environment knob.
+rex_tmp=
+expected_command='/usr/bin/rex login-server --listen unix:///run/rex/login-server.sock --accounts /etc/rex/accounts.jsonc --runtime-root /run/rex --log-format text --pam-service rex-login-server --extra-listen tailnet-serve:///run/rex/serve.sock --extra-listen tailnet://:7297'
+fail() { printf 'configure-rex: REFUSED: %s\n' "$*" >&2; exit 1; }
+property() { systemctl show "$1" -p "$2" --value; }
+active() { local state; state=$(property "$1" ActiveState) || fail "cannot inspect $1"; [[ $state != inactive && $state != failed && -n $state ]]; }
+policy_matches() { jq -e --argjson approved "$approved_policy" '. == $approved' "$1" >/dev/null 2>&1; }
+version_report() { "$rex_root/usr/bin/rex" version; }
+
+safe_path() {
+  local path="$rex_root$1"
+  while [[ $path != "$rex_root" && $path != / ]]; do
+    [[ ! -L $path ]] || fail "symlinked configuration/runtime path: $path"
+    if [[ -e $path ]]; then
+      [[ $(stat -c %u "$path") == 0 ]] && (( (8#$(stat -c %a "$path") & 022) == 0 )) || fail "unsafe ownership/mode: $path"
+    fi
+    path=${path%/*}
+  done
+}
+generate_policy() {
+  local owner=$1 tag; shift
+  [[ $owner =~ ^[A-Za-z0-9][A-Za-z0-9._%+-]*@[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || fail '--owner must be an explicit person login (email)'
+  for tag in "$@"; do
+    [[ $tag =~ ^tag:[A-Za-z0-9][A-Za-z0-9-]*$ ]] || fail '--allow-tag requires an explicit tag:NAME'
+  done
+  approved_policy=$(jq -cn --arg owner "tailscale:$owner" --args '
+    {version:1,accounts:{exedev:{principals:([$owner]+($ARGS.positional|unique|map("tailscale:"+.)))}},
+     defaults:{($owner):"exedev"}}' -- "$@")
+}
+validate_serve() {
+  jq -e --arg host "$dns:443" '
+    type == "object" and ((keys-["TCP","Web","AllowFunnel","Foreground","Services"])|length==0) and
+    ((.AllowFunnel//{})|all(.==false)) and (.Foreground//{})=={} and (.Services//{})=={} and
+    .TCP["7297"]==null and (.TCP["443"]==null or .TCP["443"]=={"HTTPS":true}) and
+    ((.Web//{}|to_entries)|all(if (.key|endswith(":443")) then
+      .key==$host and .value=={"Handlers":{"/":{"Proxy":"unix:/run/rex/serve.sock"}}} else true end)) and
+    (if .TCP["443"]!=null then .Web[$host]=={"Handlers":{"/":{"Proxy":"unix:/run/rex/serve.sock"}}}
+     else .Web[$host]==null end)' <<<"$serve" >/dev/null || fail 'Serve conflict: requires private exclusive HTTPS 443 and direct 7297'
+}
+check_environment() {
+  local ID VERSION_ID record state maintainer report passwd shell status unit fragment drops path proc exe uid line
+  # shellcheck disable=SC1091
+  . "$rex_root/etc/os-release"
+  [[ $ID == ubuntu && $VERSION_ID == 24.04 ]] || fail 'requires Ubuntu 24.04'
+  [[ -d $rex_root/run/systemd/system ]] || fail 'systemd must be running'
+  passwd=$(getent passwd exedev) || fail 'missing exedev account'
+  [[ $(cut -d: -f3 <<<"$passwd") == 1000 ]] || fail 'exedev must be UID 1000'
+  shell=$(cut -d: -f7 <<<"$passwd")
+  case "$shell" in /bin/bash|/usr/bin/bash|/bin/zsh|/usr/bin/zsh) ;; *) fail 'exedev requires Bash or Zsh' ;; esac
+  [[ -x $rex_root$shell ]] || fail 'login shell is not executable'
+  record=$(dpkg-query -W -f='${db:Status-Abbrev}\t${Version}\t${Maintainer}' rex) || fail 'installed Superlogical Rex package required'
+  IFS=$'\t' read -r state version maintainer <<<"$record"
+  [[ ( $state == 'ii ' || $state == 'hi ' ) && $maintainer == 'Superlogical <hello@superlogical.com>' && -n $version ]] || fail 'installed genuine Superlogical Rex package required'
+  cmp -s "$rex_bundle/10-tailnet.conf" <(printf '%s\n' '[Unit]' 'After=tailscaled.service' 'Requires=tailscaled.service' '' '[Service]' 'ExecStart=' "ExecStart=$expected_command") || fail 'unqualified login service configuration'
+  [[ $(dpkg-query -S /usr/bin/rex) == 'rex: /usr/bin/rex' && -f $rex_root/usr/bin/rex && -x $rex_root/usr/bin/rex ]] || fail 'Rex binary must belong to the installed package'
+  safe_path /usr/bin/rex
+  report=$(version_report) || fail 'cannot read Rex version report'
+  [[ $(awk 'NR==1 {print $1 " " $2}' <<<"$report") == "rex $version" ]] || fail 'Rex version report differs from installed package'
+  status=$(tailscale status --json) || fail 'cannot inspect Tailscale'
+  jq -e '.BackendState=="Running" and (.Self.Tags|index("tag:dev")!=null and index("tag:prod")==null) and
+    (.Self.DNSName as $dns|any(.CertDomains[]?; .==($dns|rtrimstr("."))))' <<<"$status" >/dev/null || fail 'requires tag:dev, no tag:prod, and already-enabled tailnet HTTPS'
+  dns=$(jq -er '.Self.DNSName|rtrimstr(".")' <<<"$status")
+  serve=$(tailscale serve status --json) || fail 'cannot inspect Serve'
+  validate_serve
+  for unit in rex.service rex.socket rex-login-server.socket; do
+    if active "$unit"; then fail "active $unit; refusing to stop workloads or migrate sockets"; fi
+  done
+  for unit in rex.service rex.socket rex-login-server.service rex-login-server.socket; do
+    fragment=$(property "$unit" FragmentPath) || fail "cannot inspect $unit"
+    case "$fragment" in ''|/usr/lib/systemd/system/"$unit"|/lib/systemd/system/"$unit") ;; *) fail "foreign/masked unit: $unit" ;; esac
+    if [[ -n $fragment ]]; then
+      [[ $(dpkg-query -S "$fragment") == "rex: $fragment" ]] || fail "foreign unit package: $unit"
+    elif [[ $unit == rex-login-server.service ]]; then fail 'vendor login service is missing'; fi
+    drops=$(property "$unit" DropInPaths) || fail "cannot inspect $unit drop-ins"
+    [[ -z $drops || ( $unit == rex-login-server.service && $drops == /etc/systemd/system/rex-login-server.service.d/10-tailnet.conf ) ]] || fail "foreign unit drop-ins: $unit"
+  done
+  for path in /etc/rex/accounts.jsonc /etc/systemd/system/rex-login-server.service.d/10-tailnet.conf /run/rex /var/lib/iv-rex/configuration.lock; do safe_path "$path"; done
+  for path in /etc/rex/accounts.jsonc /etc/systemd/system/rex-login-server.service.d/10-tailnet.conf /var/lib/iv-rex/configuration.lock; do
+    [[ ! -e $rex_root$path || -f $rex_root$path ]] || fail "configuration must be a regular file: $path"
+  done
+  [[ ! -e $rex_root/run/rex || -d $rex_root/run/rex ]] || fail 'Rex runtime must be a directory'
+  [[ ! -e $rex_root/run/rex/server.sock ]] || fail 'shared Rex runtime socket exists'
+  if [[ -e $rex_root/etc/rex/accounts.jsonc ]] && ! policy_matches "$rex_root/etc/rex/accounts.jsonc"; then
+    # Accept only the vendor deny-all JSONC (full-line comments/trailing comma), not a foreign policy.
+    jq -Rse 'gsub("(?m)^\\s*//[^\n]*";"")|gsub(",\\s*}";"}")|fromjson == {version:1,accounts:{}}' \
+      "$rex_root/etc/rex/accounts.jsonc" >/dev/null || fail 'foreign Rex account policy; review explicitly'
+  fi
+  path="$rex_root/etc/systemd/system/rex-login-server.service.d/10-tailnet.conf"
+  [[ ! -e $path ]] || cmp -s "$rex_bundle/10-tailnet.conf" "$path" || fail 'foreign login service configuration'
+  login_active=false; login_pid=$(property rex-login-server.service MainPID)
+  if active rex-login-server.service; then
+    login_active=true
+    policy_matches "$rex_root/etc/rex/accounts.jsonc" && cmp -s "$rex_bundle/10-tailnet.conf" "$path" || fail 'active foreign login policy/configuration'
+    [[ $login_pid =~ ^[1-9][0-9]*$ && -r $rex_root/proc/$login_pid/cmdline ]] || fail 'cannot inspect login MainPID (try sudo --plan)'
+    line=$(tr '\0' ' ' < "$rex_root/proc/$login_pid/cmdline")
+    [[ $line == "$expected_command " ]] || fail 'foreign running login command'
+  else
+    [[ ! -e $rex_root/run/rex/login-server.sock && ! -e $rex_root/run/rex/serve.sock ]] || fail 'unmanaged login/Serve socket; review explicitly'
+  fi
+  [[ $(property rex-login-server.service KillMode) == process && $(property rex-login-server.service RuntimeDirectoryPreserve) == yes ]] || fail 'vendor login service must preserve account servers/runtime'
+  record=$(ss -Hlnpt 'sport = :7297') || fail 'cannot inspect port 7297'
+  while IFS= read -r line; do
+    [[ -z $line || ( $login_active == true && $line == *"pid=$login_pid,"* ) ]] || fail 'foreign/uninspectable listener on 7297 (try sudo --plan)'
+  done <<<"$record"
+  # Inspect processes only; never run Rex clients that might auto-start a server.
+  for proc in "$rex_root"/proc/[0-9]*; do
+    exe=$(readlink "$proc/exe" 2>/dev/null) || continue
+    case "$exe" in */rex|*/'rex (deleted)') ;; *) continue ;; esac
+    uid=$(stat -c %u "$proc")
+    [[ $uid == 1000 || ( $uid == 0 && ${proc##*/} == "$login_pid" && $login_active == true ) ]] && continue
+    local -a args=()
+    mapfile -d '' -t args < "$proc/cmdline"
+    [[ $uid == 0 && ( ${args[0]:-} == /usr/bin/rex || ${args[0]:-} == rex ) && ${args[*]:1:4} == 'login-server session --account exedev' && " ${args[*]:5} " != *' --account'* ]] || fail "foreign/shared Rex process: ${proc##*/} UID $uid"
+  done
+}
+write_atomic() {
+  rex_tmp=$(mktemp "${1%/*}/.iv-rex.XXXXXX")
+  cat > "$rex_tmp"; chmod 0644 "$rex_tmp"; mv -T "$rex_tmp" "$1"; rex_tmp=
+}
+apply_configuration() {
+  local record
+  # Recheck immediately before mutation. Do not restart an already-approved login server.
+  check_environment
+  install -d -m 0755 "$rex_root/etc/rex" "$rex_root/etc/systemd/system/rex-login-server.service.d" "$rex_root/var/lib/iv-rex"
+  if ! policy_matches "$rex_root/etc/rex/accounts.jsonc"; then write_atomic "$rex_root/etc/rex/accounts.jsonc" <<<"$approved_policy"; fi
+  if ! cmp -s "$rex_bundle/10-tailnet.conf" "$rex_root/etc/systemd/system/rex-login-server.service.d/10-tailnet.conf"; then
+    write_atomic "$rex_root/etc/systemd/system/rex-login-server.service.d/10-tailnet.conf" < "$rex_bundle/10-tailnet.conf"
+    systemctl daemon-reload
+  fi
+  systemctl disable rex.service rex.socket rex-login-server.socket
+  systemctl enable rex-login-server.service
+  if ! $login_active; then systemctl start rex-login-server.service; fi
+  if [[ $(jq -r '.TCP["443"]//empty' <<<"$serve") == '' ]]; then timeout 30 tailscale serve --bg --https=443 unix:/run/rex/serve.sock </dev/null; fi
+  check_environment
+  $login_active || fail 'login service did not start'
+  jq -e '.TCP["443"]=={"HTTPS":true}' <<<"$serve" >/dev/null || fail 'private Serve handler did not apply'
+  # Configuration provenance only: installation.lock is deliberately untouched.
+  record=$(jq -n --arg version "$version" --arg dns "$dns" --arg utc "$(date -u +%FT%TZ)" \
+    '{configuration_version:1,reported_rex_version:$version,dns_name:$dns,applied_utc:$utc,account_servers:"preserved"}')
+  write_atomic "$rex_root/var/lib/iv-rex/configuration.lock" <<<"$record"
+  echo 'APPLIED: private HTTPS 443/direct 7297; account servers/sessions preserved'
+}
+main() {
+  local apply=false owner='' cmd
+  local -a tags=()
+  while (($#)); do
+    case "$1" in
+      --plan) apply=false ;; --apply) apply=true ;;
+      --owner) [[ $# -ge 2 && -n $2 && -z $owner ]] || fail '--owner requires one LOGIN, supplied once'; owner=$2; shift ;;
+      --allow-tag) [[ $# -ge 2 && -n $2 ]] || fail '--allow-tag requires tag:NAME'; tags+=("$2"); shift ;;
+      --help|-h) echo 'Usage: configure-rex --owner LOGIN [--allow-tag tag:NAME ...] [--plan|--apply]'; return ;;
+      *) fail "unknown argument: $1" ;;
+    esac
+    shift
+  done
+  [[ -n $owner ]] || fail 'explicit --owner LOGIN is required'
+  if $apply; then (( EUID == 0 )) || fail '--apply requires root'; [[ -z $rex_root ]] || fail 'apply cannot target a fixture root'; fi
+  for cmd in jq dpkg-query systemctl tailscale getent ss stat readlink cmp awk sed; do command -v "$cmd" >/dev/null || fail "missing prerequisite: $cmd"; done
+  generate_policy "$owner" "${tags[@]}"
+  if $apply; then
+    for cmd in flock timeout install mktemp chmod mv date; do command -v "$cmd" >/dev/null || fail "missing prerequisite: $cmd"; done
+    # /run is root-writable only, unlike the commonly world-writable /run/lock.
+    safe_path /run/iv-rex.lock
+    umask 077
+    exec 9>/run/iv-rex.lock
+    chmod 0600 /run/iv-rex.lock
+    flock -n 9 || fail 'another Rex deployment is running'
+    trap '[[ -z $rex_tmp ]] || rm -f -- "$rex_tmp"' EXIT
+  fi
+  check_environment
+  printf 'VALIDATED: Superlogical Rex %s; %s; private HTTPS 443/direct 7297\n' "$version" "$dns"
+  if $apply; then apply_configuration; else echo 'PLAN ONLY: no changes'; fi
+}
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then main "$@"; fi
