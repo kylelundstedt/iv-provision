@@ -434,4 +434,5 @@ prelude_user=$(env -u USER bash -c "$(sed -n '1,/^DUCKDB_VERSION=/p' "$repo/prov
   echo "provision-iv.sh prelude leaves USER unset (got '$prelude_user')" >&2; exit 1; }
 
 "$repo/tests/test-install-rex.sh"
+"$repo/tests/test-configure-rex.sh"
 printf '%s\n' 'provision script tests passed'
