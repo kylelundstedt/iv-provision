@@ -9,6 +9,9 @@ set -euo pipefail
 # set -u would stop the run at the first use.
 : "${USER:=$(id -un)}"
 export USER
+if [[ ${IV_INSTALL_REX:-0} == 1 ]]; then
+  : "${IV_REX_OWNER:?IV_INSTALL_REX=1 requires IV_REX_OWNER}"
+fi
 
 DUCKDB_VERSION=1.5.3
 TIGRIS_VERSION=3.6.1
@@ -1282,8 +1285,16 @@ while IFS= read -r name; do
 done < "$TMP/team-skills.list"
 install -m 0644 "$TMP/team-skills.list" "$TEAM_SKILLS"
 
+if [[ ${IV_INSTALL_REX:-0} == 1 ]]; then
+  echo "== Opt-in pinned public Rex =="
+  rex_args=(--apply --owner "$IV_REX_OWNER")
+  if [[ -n ${IV_REX_ALLOW_TAG:-} ]]; then rex_args+=(--allow-tag "$IV_REX_ALLOW_TAG"); fi
+  sudo "$IV_REPO/bin/install-rex" "${rex_args[@]}"
+fi
+
 echo "== Rex agent setup =="
-# Rex is installed per VM (beta token), not by this script. Where it is, install
+# Rex is optional: IV_INSTALL_REX=1 opts into the pinned public package above;
+# otherwise this script never installs it. Where it is present, install
 # its skill stub and session-start hook for Claude Code and Codex: the stub
 # defers to the installed rex CLI, so the guide always matches the version, and
 # the hook tells each agent which Rex session and pane it runs in. Safe to
