@@ -53,12 +53,12 @@ volatile, version-pinned tools.
 
 ## Layout
 
-| File               | Role                                                                   |
-| ------------------ | ---------------------------------------------------------------------- |
+| File               | Role                                                                                                                                          |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
 | `provision-iv.sh`  | Provisions the IV layer onto the IV base image (tailscale, agents, Entire, DuckDB, Apex, agent config, skills); writes `~/iv-provision.lock`. |
-| `vendor-skills.sh` | Refreshes the vendored skills snapshot in `skills/` (needs node/npx).   |
-| `skills/`          | Vendored, pinned team skills — committed to the repo so they are frozen. |
-| `bin/`             | `render-site` + `provision-docsite` + `gen-llms-txt` — installed onto PATH. |
+| `vendor-skills.sh` | Refreshes the vendored skills snapshot in `skills/` (needs node/npx).                                                                         |
+| `skills/`          | Vendored, pinned team skills — committed to the repo so they are frozen.                                                                      |
+| `bin/`             | `render-site` + `provision-docsite` + `gen-llms-txt` — installed onto PATH.                                                                   |
 
 ## Reproducibility (recipe pinning)
 
@@ -84,3 +84,77 @@ on the VM, run `provision-iv.sh`, and you get the same result.
   look most specific (`:<date>`, `:<sha>`) are cached longest and a mutable
   `:<date>` can serve yesterday's image for a full day. See "Picking a tag" in
   the [`exeslim` README](https://github.com/kylelundstedt/exeslim).
+
+## Proposed Rex default for all Linux microVMs
+
+**Proposal only: the refactor does not change `IV_INSTALL_REX` from its current
+opt-in default, enable personal persistence, or deploy to more machines.**
+
+### Scope and common entry point
+
+Install Rex by default inside every IV-managed Linux microVM, on both exe.dev
+and Apple Container, with an explicit `IV_INSTALL_REX=0` escape hatch. That means
+both the amd64 and native ARM64 exeslim-family guests, not the macOS host and not
+ordinary disposable application containers. There should be no per-hypervisor
+package-selection code or implicit production-host exemption in the installer.
+
+Make the package step part of common convergence, not a binary baked into the
+base image. After qualification, change the common provisioner's opt-in gate to
+default-on and advance both platform executors to the same pinned IV release.
+For bare deployment microVMs that deliberately do not run the development
+provisioner, have their bootstrap/executor invoke the same package-only helper
+with its small prerequisites. Installing the full development/agent stack is
+not a prerequisite. Changing only `provision-iv.sh` would not cover those bare
+machines and must not be described as "all microVMs."
+
+### Separate three responsibilities
+
+| Responsibility    | Proposed default                                                                                                                                                                                                                                                                            |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Package           | The verified official Rex installer runs inside the Linux guest and chooses the native package. No beta credential or amd64-only artifact map.                                                                                                                                              |
+| Local persistence | After the standard `exedev` account exists, run the installed CLI's `rex server install` **as `exedev`**, using its vendor-managed user units. Do not run it as root or invent another personal-server unit. Validate its coordination with the login broker before enabling it fleet-wide. |
+| Remote access     | Configure the existing private login broker only from an approved machine access profile after tailnet enrollment. Without that profile, Rex stays local; installation does not open a network listener or grant access.                                                                    |
+
+Private provisioning supplies the verified human login and any explicitly
+approved client tags. Never infer a human owner from a tagged microVM or put
+fleet identities in public defaults. Preserve the current `exedev`-only terminal
+mapping, private Tailscale transports, and fail-closed handling of conflicting
+services/routes. Existing production, controller, and newer-preview hosts need
+an explicit migration decision; default-on must not mean silently downgrading
+them, replacing their configuration, or widening shared tailnet policy.
+Use the global package for the guest; do not layer an upstream `--user` binary
+over it and accidentally shadow the managed version on `PATH`.
+
+### Version policy
+
+Keep one approved Rex version/channel and reviewed upstream installer checksum
+in the common recipe. Let upstream/APT handle architecture and signed delivery;
+keep the exact-version policy and hold rather than making new machines follow
+an unqualified floating snapshot. Review an installer checksum change instead
+of silently executing changed code. The upstream installer cache and release
+process need an immutable retained copy for fresh-VM recovery if its mutable
+download changes.
+
+Record the actual installed version, architecture, binary/installer hashes, and
+whether an install actually ran. Package updates can leave active account
+servers on the old executable; preserving their sessions is intentional, not
+proof of an upgraded runtime. Do not stop their work to make version checks pass.
+
+### Acceptance and rollout
+
+1. Qualify the refactor on a fresh amd64 exe.dev guest and an actual ARM64 Apple
+   Container microVM using the current exeslim image contract. Mocked ARM64
+   selection and upstream documentation are not native runtime qualification.
+2. Test install/reapply, unavailable-version refusal, package hold, user-unit
+   persistence, reboot, `exedev` UID, and existing-session preservation on both.
+   For remote-enabled profiles, repeat authorized/unauthorized/revoked-client
+   tests and actual HTTPS readiness. Honor certificate issuer retry windows.
+3. Approve the default-on change separately, retain explicit opt-outs during
+   adoption, and release one common recipe for both runtimes and bare bootstrap.
+   Keep the existing authoring-VM runtime exclusion until explicitly lifted.
+4. Roll out in batches without copying agent logins, keys, databases, or user
+   configuration between machines. Approval of Codex hooks remains owner-owned.
+   A restored Rex layout after reboot is not resumed terminal execution.
+
+Actual host lists, exemptions, image digests, canary evidence, and rollout
+decisions stay in the private operational record.
