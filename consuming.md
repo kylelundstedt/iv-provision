@@ -70,6 +70,76 @@ Doc-only patch releases are cheap and expected — `2.5.1` and `3.0.10` are both
 of that kind. Re-provisioning to pick one up is the same ~23-second in-place
 re-run as any other upgrade, since nothing else in the recipe changed.
 
+## Rex (explicit opt-in)
+
+Rex is not installed by default. On a private Ubuntu 24.04 amd64 development
+VM already joined to Tailscale, validate and explicitly install the qualified
+public Linux package:
+
+```bash
+sudo bin/install-rex --plan --owner owner@example.com
+sudo bin/install-rex --apply --owner owner@example.com
+```
+
+For a tagged client, add an explicitly approved `--allow-tag tag:trusted-client`.
+Tags identify devices, not individual people; every process on a device carrying
+an allowed tag can use the `exedev` account. The server being tagged does not
+give it a personal owner. No wildcard, anonymous, or root-account grants are
+created.
+
+Alternatively, opt in while running the normal provisioner as the VM login user:
+
+```bash
+IV_INSTALL_REX=1 IV_REX_OWNER=owner@example.com ./provision-iv.sh
+```
+
+Use `IV_REX_ALLOW_TAG` for an explicitly approved tagged client. The standalone
+installer accepts repeated `--allow-tag` arguments. Owner mappings are supplied
+at deployment time and are not stored in this public repository.
+
+`provisioning/rex/release.json` pins the official package URL, version, package
+checksum, and executable checksum. Installation requires no beta token. A missing
+or mismatched artifact fails closed; there is no fallback to a floating release.
+The verified package is cached locally and Rex is held against ordinary apt
+upgrades. OS security patching remains enabled. Changing the Rex version requires
+`--allow-version-change` and requalification, including checking the running
+account server: package upgrades preserve existing account servers and sessions,
+so they can still be running the previous executable. The standalone installer
+records its hashes in `/var/lib/iv-rex/provisioning.lock` and updates only the Rex
+version in an existing `~/iv-provision.lock`; it does not claim that the entire
+provisioner ran again.
+
+The always-on `rex-login-server.service` starts at boot. Its root PAM broker
+hands authorized clients to an `exedev` server; terminal programs do not run as
+root. Shared-server and socket-activation units are disabled. HTTPS on the
+machine's private Tailscale name forwards to a root-only Serve socket; tagged
+clients use `http://<machine>.<tailnet>.ts.net:7297`, encrypted by Tailscale.
+No Funnel, public listener, or shared tailnet policy change is made. Existing
+incompatible Rex or Serve configuration is refused rather than overwritten.
+An active login socket also requires an explicit operator migration; the
+installer does not stop working socket-activated access before a package install
+that might fail.
+
+The normal provisioner sets up Rex's agent skill and hooks after installation.
+For a standalone deployment, run
+`rex skill setup --agent claude --agent codex --autostart=false` as `exedev`,
+not root. Review any Codex hook approval in `/hooks`; do not change the owner's
+existing permissions or provider configuration.
+
+To stop remote access on a host configured by this recipe:
+
+```bash
+sudo tailscale serve --https=443 off
+sudo systemctl disable --now rex-login-server.socket rex-login-server.service
+```
+
+Account servers and terminal programs deliberately survive stopping the broker.
+To end those too, run `rex --autostart=false server stop` as `exedev`. A host
+reboot ends terminal processes. Rex may restore saved session layouts into new
+shells; this does not resume the programs that were running before reboot.
+Fleet approvals, host selection, and qualification evidence belong in the
+private operational record, not this public repository.
+
 ## Agent config (installed by provision-iv.sh)
 
 Every provisioned VM gets team agent defaults — no manual setup required:

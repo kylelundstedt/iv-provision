@@ -1,0 +1,13 @@
+{
+  "package": "rex",
+  "version": "0.0.1794418166-g7b4cbc",
+  "architecture": "amd64",
+  "url": "https://pkgs.superlogical.com/rex/apt/pool/main/r/rex/rex_0.0.1794418166-g7b4cbc_amd64.deb",
+  "sha256": "f19da9bdcb82b047fdeaae8783d7d1cbdb6322fc5d1f931f048865eabce21170",
+  "binary_sha256": "5f7a06acfc235c533d7381bae0a7b61a058f504689067c736fedb8f3726d0a42",
+  "artifact": "rex_0.0.1794418166-g7b4cbc_amd64.deb",
+  "channel": "snapshot",
+  "metadata_signature_verified": true,
+  "unit_sha256": "3d2b1e5f027e16b97f57ccf6f6f6ccac0092072b27131369603579306e674783",
+  "vendor_accounts_sha256": "bd93a19f82340585008fd9421bc0cde12a91d49c3ea174c36d65cd91ee5ebd28"
+}

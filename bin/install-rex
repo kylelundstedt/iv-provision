@@ -1,0 +1,397 @@
+#!/usr/bin/env bash
+# Opt-in, pinned public Rex on Ubuntu 24.04 amd64 tag:dev only.
+# Default --plan is read-only (no download). --apply requires root/sudo.
+# No account servers, sessions, tailnet policy, or OS upgrade policy are changed.
+set -euo pipefail
+
+rex_bundle=$(cd "$(dirname "${BASH_SOURCE[0]}")/../provisioning/rex" && pwd)
+rex_installer=${BASH_SOURCE[0]}
+# Internal path prefix lets offline tests source the validators against fixtures.
+# This is not an environment variable or an installer option.
+rex_root=
+rex_tmp=
+fail() { printf 'install-rex: REFUSED: %s\n' "$*" >&2; exit 1; }
+hash() { sha256sum "$1" | cut -d' ' -f1; }
+
+validate_bundle() {
+  local manifest="$rex_bundle/release.json"
+  jq -e '
+    .package == "rex" and .architecture == "amd64" and
+    (.version | test("^[0-9][0-9A-Za-z.+~-]*$")) and
+    .artifact == ("rex_" + .version + "_amd64.deb") and
+    .url == ("https://pkgs.superlogical.com/rex/apt/pool/main/r/rex/" + .artifact) and
+    ([.sha256,.binary_sha256,.unit_sha256,.vendor_accounts_sha256] |
+      all(type == "string" and test("^[0-9a-f]{64}$"))) and
+    .metadata_signature_verified == true
+  ' "$manifest" >/dev/null || fail 'invalid pinned public release manifest'
+  version=$(jq -r .version "$manifest")
+  artifact_name=$(jq -r .artifact "$manifest")
+  url=$(jq -r .url "$manifest")
+  expected_sha=$(jq -r .sha256 "$manifest")
+  expected_binary=$(jq -r .binary_sha256 "$manifest")
+  [[ $(hash "$rex_bundle/10-tailnet.conf") == "$(jq -r .unit_sha256 "$manifest")" ]] ||
+    fail 'service configuration SHA256 mismatch'
+  expected_command='/usr/bin/rex login-server --listen unix:///run/rex/login-server.sock --accounts /etc/rex/accounts.jsonc --runtime-root /run/rex --log-format text --pam-service rex-login-server --extra-listen tailnet-serve:///run/rex/serve.sock --extra-listen tailnet://:7297'
+  # A hash alone must not bless added directives or public listeners on a pin bump.
+  cmp -s "$rex_bundle/10-tailnet.conf" <(printf '%s\n' '[Unit]' \
+    'After=tailscaled.service' 'Requires=tailscaled.service' '' '[Service]' \
+    'ExecStart=' "ExecStart=$expected_command") || fail 'unqualified service command/directives'
+}
+
+generate_policy() {
+  local owner=$1 tag
+  shift
+  [[ $owner =~ ^[A-Za-z0-9][A-Za-z0-9._%+-]*@[A-Za-z0-9][A-Za-z0-9.-]*$ ]] ||
+    fail '--owner must be an explicit person login (email), not a tag or wildcard'
+  for tag in "$@"; do
+    [[ $tag =~ ^tag:[A-Za-z0-9][A-Za-z0-9-]*$ ]] ||
+      fail '--allow-tag requires an explicit tag:NAME, not a wildcard'
+  done
+  # Policy exists only in memory until apply. Never infer an owner from a tagged VM.
+  approved_policy=$(jq -cn --arg owner "tailscale:$owner" --args '
+    {version:1,accounts:{exedev:{principals:([$owner] +
+      ($ARGS.positional | unique | map("tailscale:" + .)))}},
+      defaults:{($owner):"exedev"}}' -- "$@")
+}
+
+policy_matches() {
+  jq -e --argjson approved "$approved_policy" '. == $approved' "$1" >/dev/null 2>&1
+}
+
+validate_artifact() {
+  local artifact=$1
+  [[ -f $artifact && ! -L $artifact ]] || fail 'missing/unsafe cached package'
+  [[ $(hash "$artifact") == "$expected_sha" ]] || fail 'package SHA256 mismatch'
+  [[ $(dpkg-deb -f "$artifact" Package) == rex ]] || fail 'wrong package'
+  [[ $(dpkg-deb -f "$artifact" Version) == "$version" ]] || fail 'package version mismatch'
+  [[ $(dpkg-deb -f "$artifact" Architecture) == amd64 ]] || fail 'package architecture mismatch'
+  [[ $(dpkg-deb --fsys-tarfile "$artifact" | tar -xOf - ./usr/bin/rex | sha256sum | cut -d' ' -f1) == "$expected_binary" ]] ||
+    fail 'packaged binary SHA256 mismatch'
+}
+
+validate_serve() {
+  # Only the 443 handler is ours. Preserve unrelated background Serve ports.
+  # Refuse Funnel, foreground/service configurations, and any 7297 proxy.
+  jq -e --arg host "$dns:443" '
+    type == "object" and
+    ((keys - ["TCP","Web","AllowFunnel","Foreground","Services"]) | length == 0) and
+    ((.AllowFunnel // {}) | all(. == false)) and
+    (.Foreground // {}) == {} and (.Services // {}) == {} and
+    (.TCP["7297"] == null) and
+    (.TCP["443"] == null or .TCP["443"] == {"HTTPS":true}) and
+    ((.Web // {} | to_entries) | all(
+      if (.key | endswith(":443")) then
+        .key == $host and .value == {"Handlers":{"/":{"Proxy":"unix:/run/rex/serve.sock"}}}
+      else true end)) and
+    (if .TCP["443"] != null then
+      .Web[$host] == {"Handlers":{"/":{"Proxy":"unix:/run/rex/serve.sock"}}}
+    else (.Web[$host] == null) end)
+  ' <<<"$serve" >/dev/null || fail 'Serve conflict: requires private, exclusive Rex HTTPS 443 and direct 7297'
+}
+
+unit_property() { systemctl show "$1" -p "$2" --value; }
+unit_state() {
+  local state
+  state=$(unit_property "$1" ActiveState) || fail "cannot inspect $1"
+  case "$state" in inactive|failed|'') return 1 ;; *) return 0 ;; esac
+}
+
+check_environment() {
+  local ID VERSION_ID status record state arch unit fragment drops command_line listeners query_status
+  # shellcheck disable=SC1091
+  . "$rex_root/etc/os-release"
+  [[ $ID == ubuntu && $VERSION_ID == 24.04 ]] || fail 'qualified only on Ubuntu 24.04'
+  [[ $(dpkg --print-architecture) == amd64 ]] || fail 'qualified only on amd64 (not arm64)'
+  [[ -d $rex_root/run/systemd/system ]] || fail 'systemd must be running'
+  [[ $(getent passwd exedev | cut -d: -f3,7) == '1000:/bin/bash' ]] ||
+    fail 'exedev must be UID 1000 with /bin/bash'
+  status=$(tailscale status --json) || fail 'cannot read Tailscale status'
+  jq -e '.BackendState == "Running" and
+    (.Self.Tags | index("tag:dev") != null and index("tag:prod") == null) and
+    (.Self.DNSName as $dns | any(.CertDomains[]?; . == ($dns | rtrimstr("."))))' \
+    <<<"$status" >/dev/null || fail 'requires tag:dev, no tag:prod, and already-enabled tailnet HTTPS'
+  dns=$(jq -er '.Self.DNSName | rtrimstr(".")' <<<"$status")
+  serve=$(tailscale serve status --json) || fail 'cannot read Serve configuration'
+  validate_serve
+  # Even an idle shared socket could activate workloads while we install.
+  for unit in rex.service rex.socket; do
+    if unit_state "$unit"; then fail "shared $unit is active; refusing to stop workloads"; fi
+  done
+  for unit in rex.service rex.socket rex-login-server.service rex-login-server.socket; do
+    fragment=$(unit_property "$unit" FragmentPath) || fail "cannot inspect $unit fragment"
+    case "$fragment" in
+      ''|"/usr/lib/systemd/system/$unit"|"/lib/systemd/system/$unit") ;;
+      *) fail "foreign/masked unit: $unit ($fragment)" ;;
+    esac
+    drops=$(unit_property "$unit" DropInPaths) || fail "cannot inspect $unit drop-ins"
+    if [[ $unit == rex-login-server.service ]]; then
+      [[ -z $drops || $drops == /etc/systemd/system/rex-login-server.service.d/10-tailnet.conf ]] ||
+        fail "foreign login service drop-ins: $drops"
+    else
+      [[ -z $drops ]] || fail "foreign $unit drop-ins"
+    fi
+  done
+  if [[ -e $rex_root/run/rex ]]; then
+    [[ ! -L $rex_root/run/rex && $(stat -c %u "$rex_root/run/rex") == 0 ]] ||
+      fail 'shared/foreign /run/rex; do not delete live runtime directories'
+    [[ ! -e $rex_root/run/rex/server.sock ]] || fail 'shared Rex runtime socket exists'
+  fi
+  [[ ! -L $rex_root/etc/rex/accounts.jsonc &&
+     ! -L $rex_root/etc/systemd/system/rex-login-server.service.d/10-tailnet.conf ]] ||
+    fail 'foreign symlinked Rex policy/configuration'
+  if [[ -e $rex_root/etc/rex/accounts.jsonc ]]; then
+    policy_matches "$rex_root/etc/rex/accounts.jsonc" ||
+      [[ $(hash "$rex_root/etc/rex/accounts.jsonc") == "$(jq -r .vendor_accounts_sha256 "$rex_bundle/release.json")" ]] ||
+      fail 'foreign Rex account policy; review explicitly'
+  fi
+  if [[ -e $rex_root/etc/systemd/system/rex-login-server.service.d/10-tailnet.conf ]]; then
+    cmp -s "$rex_bundle/10-tailnet.conf" "$rex_root/etc/systemd/system/rex-login-server.service.d/10-tailnet.conf" ||
+      fail 'foreign login service configuration; review explicitly'
+  fi
+  if record=$(dpkg-query -W -f='${db:Status-Abbrev}\t${Version}\t${Architecture}' rex 2>/dev/null); then :
+  else
+    query_status=$?
+    (( query_status == 1 )) || fail 'cannot inspect installed Rex package'
+    record=
+  fi
+  installed=
+  if [[ -n $record ]]; then
+    IFS=$'\t' read -r state installed arch <<<"$record"
+    if [[ $state == 'rc ' ]]; then installed=
+    else
+      [[ ( $state == 'ii ' || $state == 'hi ' ) && $arch == amd64 ]] ||
+        fail 'Rex package is not fully installed amd64'
+    fi
+  fi
+  [[ -z $installed || $installed == "$version" || $allow_version_change == true ]] ||
+    fail "installed Rex $installed differs; use --allow-version-change after reviewing live sessions"
+  if [[ $installed == "$version" ]]; then
+    [[ -f $rex_root/usr/bin/rex && $(hash "$rex_root/usr/bin/rex") == "$expected_binary" ]] ||
+      fail 'installed binary differs from the pinned build'
+  fi
+  login_active=false
+  if unit_state rex-login-server.socket; then
+    fail 'active login socket requires explicit operator migration to always-on service'
+  fi
+  if unit_state rex-login-server.service; then login_active=true; fi
+  login_pid=$(unit_property rex-login-server.service MainPID)
+  if $login_active; then
+    policy_matches "$rex_root/etc/rex/accounts.jsonc" &&
+      cmp -s "$rex_bundle/10-tailnet.conf" "$rex_root/etc/systemd/system/rex-login-server.service.d/10-tailnet.conf" ||
+      fail 'active foreign Rex login service/socket policy'
+    [[ $(unit_property rex-login-server.service KillMode) == process &&
+       $(unit_property rex-login-server.service RuntimeDirectoryPreserve) == yes ]] ||
+      fail 'login service must preserve account servers and runtime on restart'
+  fi
+  if $login_active; then
+    [[ $login_pid =~ ^[1-9][0-9]*$ && -r $rex_root/proc/$login_pid/cmdline ]] ||
+      fail 'cannot inspect login MainPID (try sudo --plan)'
+    command_line=$(tr '\0' ' ' < "$rex_root/proc/$login_pid/cmdline")
+    [[ $command_line == "$expected_command " ]] || fail 'foreign running login command'
+  fi
+  listeners=$(ss -Hlnpt 'sport = :7297') || fail 'cannot inspect port 7297'
+  while IFS= read -r record; do
+    [[ -z $record ]] && continue
+    [[ $login_active == true && $record == *"pid=$login_pid,"* ]] ||
+      fail 'foreign/uninspectable listener on 7297 (try sudo --plan)'
+  done <<<"$listeners"
+  local home
+  home=$(getent passwd exedev | cut -d: -f6)
+  [[ $home == /* ]] || fail 'exedev must have an absolute home directory'
+  provision_lock="$rex_root$home/iv-provision.lock"
+  validate_provision_lock
+}
+
+is_exedev_pam_helper() {
+  local proc=$1 arg
+  local -a args=()
+  [[ -r $proc/cmdline ]] || return 1
+  mapfile -d '' -t args < "$proc/cmdline"
+  [[ ${#args[@]} -ge 5 && ( ${args[0]} == /usr/bin/rex || ${args[0]} == rex ) &&
+     ${args[1]} == login-server && ${args[2]} == session &&
+     ${args[3]} == --account && ${args[4]} == exedev ]] || return 1
+  # Do not allow a later account flag to override the approved account.
+  for arg in "${args[@]:5}"; do
+    case "$arg" in --account|--account=*) return 1 ;; esac
+  done
+}
+
+runtime_report() {
+  # Do NOT run Rex clients: some commands auto-start servers. Inspect /proc only.
+  local proc exe digest uid pid
+  for proc in "$rex_root"/proc/[0-9]*; do
+    exe=$(readlink "$proc/exe" 2>/dev/null) || continue
+    case "$exe" in */rex|*/'rex (deleted)') ;; *) continue ;; esac
+    pid=${proc##*/}
+    uid=$(stat -c %u "$proc")
+    [[ $uid == 1000 || $pid == "$login_pid" ]] ||
+      { [[ $uid == 0 ]] && is_exedev_pam_helper "$proc"; } ||
+      fail "foreign Rex process PID $pid UID $uid; refusing shared workloads"
+    digest=$(hash "$proc/exe") || fail "cannot inspect Rex PID $pid"
+    if [[ $digest != "$expected_binary" ]]; then
+      printf 'WARNING: running Rex PID %s UID %s binary %s differs from pin; sessions left intact\n' "$pid" "$uid" "$digest" >&2
+    fi
+  done
+}
+
+validate_provision_lock() {
+  if [[ -e $provision_lock || -L $provision_lock ]]; then
+    [[ -f $provision_lock && ! -L $provision_lock ]] ||
+      fail 'existing iv-provision.lock must be a regular file, not a symlink'
+    [[ $(grep -c '^rex_version=' "$provision_lock" || true) -le 1 ]] ||
+      fail 'existing iv-provision.lock has duplicate rex_version fields'
+  fi
+}
+
+update_provision_lock() {
+  local rex_version=${1:-$version}
+  validate_provision_lock
+  [[ -f $provision_lock ]] || return 0
+  grep -qxF "rex_version=$rex_version" "$provision_lock" && return 0
+  rex_tmp=$(mktemp "${provision_lock%/*}/.iv-provision.lock.XXXXXX")
+  awk -v version="$rex_version" '
+    /^rex_version=/ {print "rex_version=" version; found=1; next}
+    {print}
+    END {if (!found) print "rex_version=" version}' \
+    "$provision_lock" > "$rex_tmp"
+  chown --reference="$provision_lock" "$rex_tmp"
+  chmod --reference="$provision_lock" "$rex_tmp"
+  mv -T "$rex_tmp" "$provision_lock"
+  rex_tmp=
+}
+
+apply_rex() {
+  local changed=false package_changed=false cli_version
+  # Recheck immediately before touching runtime; downloads may have taken time.
+  check_environment
+  runtime_report
+  # Active sockets/shared workloads were refused before any mutation. Leave the
+  # running login service untouched if dpkg fails (for example, an apt lock).
+  if [[ $installed != "$version" ]]; then
+    dpkg --force-confdef --force-confold --install "$artifact"
+    package_changed=true
+  fi
+  [[ $(hash /usr/bin/rex) == "$expected_binary" ]] || fail 'post-install binary SHA256 mismatch'
+  if ! policy_matches /etc/rex/accounts.jsonc; then
+    rex_tmp=$(mktemp /etc/rex/.accounts.XXXXXX)
+    printf '%s\n' "$approved_policy" > "$rex_tmp"
+    chmod 0644 "$rex_tmp"
+    mv -T "$rex_tmp" /etc/rex/accounts.jsonc
+    rex_tmp=
+    changed=true
+  fi
+  if ! cmp -s "$rex_bundle/10-tailnet.conf" /etc/systemd/system/rex-login-server.service.d/10-tailnet.conf; then
+    install -d -o root -g root -m 0755 /etc/systemd/system/rex-login-server.service.d
+    install -o root -g root -m 0644 "$rex_bundle/10-tailnet.conf" /etc/systemd/system/rex-login-server.service.d/10-tailnet.conf
+    changed=true
+  fi
+  apt-mark hold rex >/dev/null
+  if $changed || $package_changed; then systemctl daemon-reload; fi
+  systemctl disable rex.socket rex.service rex-login-server.socket
+  systemctl enable rex-login-server.service
+  # The package postinst restarts an upgraded login server, but never its account
+  # servers. Only restart here for config changes or a stale login MainPID.
+  login_pid=$(unit_property rex-login-server.service MainPID)
+  if systemctl is-active --quiet rex-login-server.service; then
+    if $changed || [[ $(hash "/proc/$login_pid/exe") != "$expected_binary" ]]; then
+      systemctl restart rex-login-server.service
+    fi
+  else
+    systemctl start rex-login-server.service
+  fi
+  if [[ $(jq -r '.TCP["443"] // empty' <<<"$serve") == '' ]]; then
+    timeout 30 tailscale serve --bg --https=443 unix:/run/rex/serve.sock </dev/null
+  fi
+  systemctl is-active --quiet rex-login-server.service || fail 'login service did not start'
+  check_environment
+  runtime_report
+  [[ $(hash "/proc/$login_pid/exe") == "$expected_binary" ]] || fail 'login MainPID binary mismatch'
+  jq -e --arg host "$dns:443" '.Web[$host].Handlers["/"].Proxy == "unix:/run/rex/serve.sock"' \
+    <<<"$serve" >/dev/null || fail 'private Serve handler did not apply'
+  cli_version=$(/usr/bin/rex version | awk 'NR == 1 {print $2}') || fail 'cannot read installed Rex version'
+  [[ -n $cli_version ]] || fail 'installed Rex did not report its version'
+  update_provision_lock "$cli_version"
+  install -d -o root -g root -m 0755 /var/lib/iv-rex
+  rex_tmp=$(mktemp /var/lib/iv-rex/.lock.XXXXXX)
+  jq --arg applied_utc "$(date -u +%FT%TZ)" --arg dns "$dns" \
+    --arg reported_rex_version "$cli_version" \
+    --arg installer_sha256 "$(hash "$rex_installer")" \
+    --arg manifest_sha256 "$(hash "$rex_bundle/release.json")" \
+    --arg accounts_sha256 "$(printf '%s\n' "$approved_policy" | sha256sum | cut -d' ' -f1)" \
+    '. + {applied_utc:$applied_utc,dns_name:$dns,reported_rex_version:$reported_rex_version,installer_sha256:$installer_sha256,
+      manifest_sha256:$manifest_sha256,accounts_sha256:$accounts_sha256,
+      update_policy:"apt-hold-explicit-version-change",account_servers:"preserved; may still run an older binary"}' \
+    "$rex_bundle/release.json" > "$rex_tmp"
+  chmod 0644 "$rex_tmp"
+  mv -T "$rex_tmp" /var/lib/iv-rex/provisioning.lock
+  rex_tmp=
+  echo 'APPLIED: pinned public Rex, always-on login service, private 443/7297; account sessions preserved'
+}
+
+main() {
+  local apply=false cmd cache owner=
+  local -a allow_tags=()
+  allow_version_change=false
+  while (($#)); do
+    case "$1" in
+      --plan) apply=false ;;
+      --apply) apply=true ;;
+      --allow-version-change) allow_version_change=true ;;
+      --owner)
+        [[ $# -ge 2 && -n $2 && -z $owner ]] || fail '--owner requires one LOGIN, supplied once'
+        owner=$2; shift ;;
+      --allow-tag)
+        [[ $# -ge 2 && -n $2 ]] || fail '--allow-tag requires tag:NAME'
+        allow_tags+=("$2"); shift ;;
+      --help|-h) echo 'Usage: install-rex --owner LOGIN [--allow-tag tag:NAME ...] [--plan|--apply] [--allow-version-change]'; return ;;
+      *) fail "unknown argument: $1" ;;
+    esac
+    shift
+  done
+  [[ -n $owner ]] || fail 'explicit --owner LOGIN is required'
+  for cmd in jq dpkg dpkg-deb dpkg-query sha256sum tar systemctl tailscale getent ss stat readlink cmp; do
+    command -v "$cmd" >/dev/null || fail "missing prerequisite: $cmd"
+  done
+  generate_policy "$owner" "${allow_tags[@]}"
+  if $apply; then
+    (( EUID == 0 )) || fail 'use sudo for --apply'
+    [[ -z $rex_root ]] || fail 'apply cannot target a fixture root'
+    for cmd in curl flock apt-mark timeout; do
+      command -v "$cmd" >/dev/null || fail "missing prerequisite: $cmd"
+    done
+    exec 9>/run/lock/iv-rex-provision.lock
+    flock -n 9 || fail 'another Rex deployment is running'
+    trap '[[ -z $rex_tmp ]] || rm -f -- "$rex_tmp"' EXIT
+  fi
+  validate_bundle
+  check_environment
+  runtime_report
+  cache="$rex_root/var/cache/iv-rex"
+  artifact="$cache/$artifact_name"
+  if [[ -e $cache || -L $cache ]]; then
+    [[ -d $cache && ! -L $cache && $(stat -c %u "$cache") == 0 &&
+       $(stat -c %a "$cache") =~ ^[57][015][015]$ ]] || fail 'cache must be root-owned and not writable by others'
+  fi
+  if [[ -e $artifact || -L $artifact ]]; then
+    [[ $(stat -c %u "$artifact") == 0 && $(stat -c %a "$artifact") =~ ^[4567][0145][0145]$ ]] ||
+      fail 'cached package must be root-owned and not writable by others'
+    validate_artifact "$artifact"
+  elif $apply; then
+    install -d -o root -g root -m 0755 "$cache"
+    rex_tmp=$(mktemp "$cache/.download.XXXXXX")
+    # No tokens, repo credentials, mutable index, installer script, or fallback.
+    curl -q --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+      --max-time 180 "$url" -o "$rex_tmp" || fail 'pinned public package unavailable; no fallback'
+    validate_artifact "$rex_tmp"
+    chmod 0644 "$rex_tmp"
+    mv -T "$rex_tmp" "$artifact"
+    rex_tmp=
+  else
+    printf 'ARTIFACT PENDING: --apply downloads and verifies %s (SHA256 %s) before runtime changes\n' "$url" "$expected_sha"
+  fi
+  printf 'VALIDATED: manifest/config/environment; Rex %s; %s; private HTTPS 443 + direct tailnet 7297\n' "$version" "$dns"
+  if ! $apply; then echo 'PLAN ONLY: no changes or downloads made. Use --apply explicitly under sudo to opt in.'; return; fi
+  apply_rex
+}
+
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then main "$@"; fi
