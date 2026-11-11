@@ -103,8 +103,15 @@ check_environment() {
   [[ $ID == ubuntu && $VERSION_ID == 24.04 ]] || fail 'qualified only on Ubuntu 24.04'
   [[ $(dpkg --print-architecture) == amd64 ]] || fail 'qualified only on amd64 (not arm64)'
   [[ -d $rex_root/run/systemd/system ]] || fail 'systemd must be running'
-  [[ $(getent passwd exedev | cut -d: -f3,7) == '1000:/bin/bash' ]] ||
-    fail 'exedev must be UID 1000 with /bin/bash'
+  [[ $(getent passwd exedev | cut -d: -f3) == 1000 ]] ||
+    fail 'exedev must be UID 1000'
+  local login_shell
+  login_shell=$(getent passwd exedev | cut -d: -f7)
+  case "$login_shell" in
+    /bin/bash|/usr/bin/bash|/bin/zsh|/usr/bin/zsh) ;;
+    *) fail 'exedev must have a qualified Bash or Zsh login shell' ;;
+  esac
+  [[ -x $rex_root$login_shell ]] || fail 'configured login shell is not executable'
   status=$(tailscale status --json) || fail 'cannot read Tailscale status'
   jq -e '.BackendState == "Running" and
     (.Self.Tags | index("tag:dev") != null and index("tag:prod") == null) and
