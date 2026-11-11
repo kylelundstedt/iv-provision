@@ -73,8 +73,9 @@ re-run as any other upgrade, since nothing else in the recipe changed.
 ## Rex (explicit opt-in)
 
 Rex is not installed by default. On a private Ubuntu 24.04 amd64 development
-VM already joined to Tailscale, validate and explicitly install the qualified
-public Linux package:
+VM already joined to Tailscale, with the standard UID-1000 `exedev` account and
+its existing Bash or Zsh login shell, validate and explicitly install the
+qualified public Linux package:
 
 ```bash
 sudo bin/install-rex --plan --owner owner@example.com

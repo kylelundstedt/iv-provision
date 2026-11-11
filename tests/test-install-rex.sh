@@ -12,7 +12,9 @@ trap 'rm -rf "$tmp"' EXIT
 # shellcheck source=../bin/install-rex
 source "$script"
 rex_root="$tmp/root"
-mkdir -p "$rex_root"/{etc,run/systemd/system,proc,usr/bin}
+mkdir -p "$rex_root"/{etc,run/systemd/system,proc,usr/bin,bin}
+touch "$rex_root"/{bin,usr/bin}/{bash,zsh}
+chmod 0755 "$rex_root"/{bin,usr/bin}/{bash,zsh}
 printf 'ID=ubuntu\nVERSION_ID=24.04\n' > "$rex_root/etc/os-release"
 cat > "$tmp/status.json" <<'EOF'
 {"BackendState":"Running","Self":{"Tags":["tag:dev"],"DNSName":"fixture.test.ts.net."},"CertDomains":["fixture.test.ts.net"]}
@@ -25,7 +27,7 @@ dpkg() {
   [[ $* == --print-architecture ]] || { echo dpkg >> "$mutation_log"; return 99; }
   echo "${test_arch:-amd64}"
 }
-getent() { [[ $* == 'passwd exedev' ]]; echo "exedev:x:${test_uid:-1000}:1000::/home/exedev:/bin/bash"; }
+getent() { [[ $* == 'passwd exedev' ]]; echo "exedev:x:${test_uid:-1000}:1000::/home/exedev:${test_shell:-/bin/bash}"; }
 tailscale() {
   case "$*" in
     'status --json') cat "$tmp/status.json" ;;
@@ -83,6 +85,14 @@ grep -q 'PLAN ONLY' "$tmp/output"
 fixture_snapshot > "$tmp/after"
 cmp "$tmp/before" "$tmp/after"
 ok plan --plan
+test_shell=/bin/zsh ok plan
+test_shell=/usr/bin/zsh ok plan
+test_shell=/usr/bin/bash ok plan
+test_shell=/usr/sbin/nologin refused 'qualified Bash or Zsh' plan
+test_shell=/bin/false refused 'qualified Bash or Zsh' plan
+chmod 0644 "$rex_root/bin/zsh"
+test_shell=/bin/zsh refused 'login shell is not executable' plan
+chmod 0755 "$rex_root/bin/zsh"
 refused 'explicit --owner LOGIN is required' main --plan
 refused '--owner requires one LOGIN' main --owner
 refused '--allow-tag requires tag:NAME' main --owner owner@example.test --allow-tag
